@@ -67,17 +67,16 @@ async function generationReference(ref){
   const pending=(async()=>{
    if(ref.source==='upload'){const blob=await browserDB.blob(ref.id);return {blob,note:''};}
    const item=resolve(ref);if(!item)throw new Error('参考素材已不存在，请重新选择');
-   const urls=[...new Set([item.original,item.full,item.preview].filter(Boolean))];
-   for(const url of urls){
-    try{
-     const response=await fetch(url,{credentials:'omit',referrerPolicy:'no-referrer',signal:AbortSignal.timeout(30000)});
-     if(!response.ok)continue;
-     const blob=await response.blob();
-     if(!['image/png','image/jpeg','image/webp'].includes(blob.type)||!blob.size||blob.size>50*1024**2)continue;
-     return {blob,note:url!==urls[0]?`${item.title}：原图无法跨域读取，使用图库预览图作为参考。`:''};
-    }catch(_){}
-   }
-   throw new Error('无法读取图库参考图片，请下载后手动上传，再生成');
+   if(!item.original)throw new Error('此素材没有可读取的原图，已停止提交。请手动上传原图。');
+   const original=new URL(item.original,location.href);
+   if(original.hostname==='github.com'&&original.pathname.includes('/releases/download/'))throw new Error('此图库原图位于 GitHub Releases，无法供浏览器跨域读取。已停止提交，不会使用预览图代替；请手动上传原图。');
+   try{
+    const response=await fetch(original.href,{credentials:'omit',referrerPolicy:'no-referrer',signal:AbortSignal.timeout(30000)});
+    if(!response.ok)throw new Error();
+    const blob=await response.blob();
+    if(!['image/png','image/jpeg','image/webp'].includes(blob.type)||!blob.size||blob.size>50*1024**2)throw new Error();
+    return {blob,note:''};
+   }catch(_){throw new Error('无法读取图库原图，已停止提交，不会使用预览图代替。请手动上传原图。');}
   })();referenceCache.set(cacheKey,pending);pending.catch(()=>referenceCache.delete(cacheKey));
  }
  return referenceCache.get(cacheKey);
@@ -167,10 +166,11 @@ function renderPlan(){
  const gcd=(a,b)=>b?gcd(b,a%b):a,div=gcd(state.params.width,state.params.height);
  $('#aspect').textContent=(state.params.width/div)+':'+(state.params.height/div);
  $('#poseCount').textContent=state.params.poses.length;
- const ready=models.length&&resolve(state.params.person)&&resolve(state.params.cloth)&&state.params.poses.length&&state.params.poses.every(resolve)&&!submitting&&!jobs.some(j=>['queued','running'].includes(j.status));
+ const paused=isBrowser&&status.paused;
+ const ready=!paused&&models.length&&resolve(state.params.person)&&resolve(state.params.cloth)&&state.params.poses.length&&state.params.poses.every(resolve)&&!submitting&&!jobs.some(j=>['queued','running'].includes(j.status));
  $('#generate').disabled=!ready;
- $('#generate').textContent=submitting?'准备参考图…':!models.length?'请先配置模型':`生成 ${count} 张`;
- $('#modelNotice').textContent=models.length?(isBrowser?'每张单独请求并计费，结果逐张返回。请保持此标签页打开；图库原图无法读取时会使用预览图并标注。':'每张图片单独返回；提交后可切换页面，任务会继续执行。'):status.message||'请在设置中配置模型。';
+ $('#generate').textContent=paused?'生图已暂停':submitting?'准备参考图…':!models.length?'请先配置模型':`生成 ${count} 张`;
+ $('#modelNotice').textContent=paused?status.message:models.length?(isBrowser?'每张单独请求并计费，结果逐张返回。请保持此标签页打开；原图无法读取时会停止提交。':'每张图片单独返回；提交后可切换页面，任务会继续执行。'):status.message||'请在设置中配置模型。';
 }
 function referenceCard(ref,kind,index){const item=resolve(ref),title=item?.title||'引用已失效';return `<div class="reference-card"><button class="reference-image" data-view-ref="${esc(ref.id)}" data-ref-source="${esc(ref.source)}" aria-label="查看 ${esc(title)}">${item?imageTag(ref,title):'<span>素材已移除</span>'}</button><button class="remove-reference" data-remove-kind="${kind}" data-index="${index}" aria-label="移除 ${esc(title)}">${icon('close')}</button><span class="reference-caption">${esc(item?.angle?item.angle+' · '+title:title)}</span></div>`;}
 async function renderReferences(){
@@ -234,8 +234,8 @@ async function renderWorks(){
 }
 function renderSettings(){
  const connection=isBrowser?provider.info():null;
- $('#modelSettingsStatus').textContent=isBrowser?(connection.verified?'已成功生成':connection.configured?'已填写 · 待验证':'待填写密钥'):(models.length?'已连接':'未接入');
- $('#modelSettingsMessage').textContent=isBrowser?'ai.cursorai.art · 多图编辑。人像、服装、当前姿势按此顺序上传。密钥不会写入 GitHub；只有点击生成才会提交图片。':models.length?`当前 ${models.length} 个模型可用。`:'请打开 GitHub 在线版配置本次图像接口；当前本地管理服务未接入模型。';
+ $('#modelSettingsStatus').textContent=isBrowser?(connection.paused?'提交已暂停':connection.verified?'已成功生成':connection.configured?'已填写 · 待验证':'待填写密钥'):(models.length?'已连接':'未接入');
+ $('#modelSettingsMessage').textContent=isBrowser?(connection.paused?connection.message:'ai.cursorai.art · 多图编辑。人像、服装、当前姿势按此顺序上传。密钥不会写入 GitHub；只有点击生成才会提交图片。'):models.length?`当前 ${models.length} 个模型可用。`:'请打开 GitHub 在线版配置本次图像接口；当前本地管理服务未接入模型。';
  $('#providerSettings').hidden=!isBrowser;
  $('#dataLocation').textContent=isBrowser?'私人图片、草稿与作品保存在当前浏览器。清除站点数据会移除这些内容；请保留自己的原始图片。':'私人图片、草稿、作品与任务记录保存在服务器数据目录的 studio/ 子目录中。';
 }
@@ -246,7 +246,7 @@ async function renderResults(job){
  if(!job){$('#jobStatus').textContent='';$('#batchSummary').textContent='';$('#jobActions').hidden=true;$('#results').innerHTML=empty('图片会出现在这里',models.length?'左侧选好参考图片后开始生成。':'模型尚未接入，可先上传素材、保存草稿或导入作品。');return;}
  $('#jobStatus').textContent=`${statuses[job.status]||job.status} · ${job.tasks.filter(t=>t.status==='done').length}/${job.tasks.length} 张`;
  $('#batchSummary').textContent=`${job.params.model} · ${job.params.width}×${job.params.height} · ${formatDate(job.created_at)}`;
- $('#jobActions').hidden=!['queued','running','failed','partial'].includes(job.status);$('#cancelJob').hidden=!['queued','running'].includes(job.status);$('#retryJob').hidden=!job.tasks.some(t=>t.status==='failed');
+ $('#jobActions').hidden=!['queued','running','failed','partial'].includes(job.status);$('#cancelJob').hidden=!['queued','running'].includes(job.status);$('#retryJob').hidden=(isBrowser&&status.paused)||!job.tasks.some(t=>t.status==='failed');
  $('#results').innerHTML=job.tasks.map(task=>{
   const pose=resolve(task.spec.pose),label=(pose?.angle||pose?.title||'姿势')+' · '+(task.spec.variation+1);
   const note=(task.reference_notes||[]).join(' ');
@@ -268,6 +268,7 @@ async function watchJob(id){
  }
 }
 async function generate(){
+ if(isBrowser&&status.paused){toast(status.message);return;}
  if(submitting)return;
  if(!models.length){toast('模型尚未接入，未创建任务');return;}
  if(state.params.poses.length*state.params.variants>20){if(!confirm('本次将创建较多任务，请确认模型的真实费用规则。是否继续？'))return;}
@@ -308,7 +309,7 @@ $('#toggleConfig').onclick=()=>{const hidden=document.body.classList.toggle('con
 $('#draftTitle').oninput=()=>{state.title=$('#draftTitle').value;markDirty();};$('#prompt').oninput=()=>{state.params.prompt=$('#prompt').value;markDirty();};
 $('#variants').onchange=()=>{state.params.variants=Number($('#variants').value);renderPlan();markDirty();};$('#size').onchange=()=>{[state.params.width,state.params.height]=$('#size').value.split('x').map(Number);renderPlan();markDirty();};$('#model').onchange=()=>{state.params.model=$('#model').value;sizeOptions();renderPlan();markDirty();};
 $('#quality').onchange=()=>{state.params.quality=$('#quality').value;markDirty();};
-$('#generate').onclick=guard(generate);$('#cancelJob').onclick=guard(async()=>{if(state.activeJob){const r=await api('/jobs/'+state.activeJob+'/cancel',{});toast(r.message);await syncJob(state.activeJob);}});$('#retryJob').onclick=guard(async()=>{if(!state.activeJob)return;if(!confirm('重新提交失败项可能产生新的费用。是否重试？'))return;const job=await api('/jobs/'+state.activeJob+'/retry',{idempotency_key:uuid()});watchJob(job.id).catch(e=>toast(e.message));});
+$('#generate').onclick=guard(generate);$('#cancelJob').onclick=guard(async()=>{if(state.activeJob){const r=await api('/jobs/'+state.activeJob+'/cancel',{});toast(r.message);await syncJob(state.activeJob);}});$('#retryJob').onclick=guard(async()=>{if(isBrowser&&status.paused){toast(status.message);return;}if(!state.activeJob)return;if(!confirm('重新提交失败项可能产生新的费用。是否重试？'))return;const job=await api('/jobs/'+state.activeJob+'/retry',{idempotency_key:uuid()});watchJob(job.id).catch(e=>toast(e.message));});
 $('#assetTabs').onclick=guard(async e=>{const button=e.target.closest('[data-kind]');if(!button)return;state.kind=button.dataset.kind;state.assetLimit=60;$('#assetCategory').value='';document.querySelectorAll('#assetTabs button').forEach(b=>b.setAttribute('aria-pressed',String(b===button)));updateCategories(false);await renderMaterials(false);});
 for(const id of ['assetCategory','favoriteAssets','myUploads'])$('#'+id).onchange=guard(async()=>{state.assetLimit=60;await renderMaterials(false);});$('#assetSearch').oninput=()=>{clearTimeout(searchTimer);searchTimer=setTimeout(guard(async()=>{state.assetLimit=60;await renderMaterials(false);}),180);};
 for(const id of ['pickerCategory','pickerMine'])$('#'+id).onchange=guard(async()=>{state.pickerLimit=60;await renderMaterials(true);});$('#pickerSearch').oninput=()=>{clearTimeout(searchTimer);searchTimer=setTimeout(guard(async()=>{state.pickerLimit=60;await renderMaterials(true);}),180);};
