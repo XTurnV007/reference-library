@@ -19,7 +19,8 @@ SOURCE_FILES = ['.gitignore','README.md','PUBLISH.md','crawler.py','library.py',
                 'studio.py','test_studio.py','PLATFORM.md','AI_STUDIO_PLAN.md',
                 'static/platform.html','static/platform.js','static/platform.css',
                 'static/image-provider.js','image_relay.py','IMAGE_API.md',
-                'test_image_relay.py','test_image_provider.cjs']
+                'test_image_relay.py','test_image_provider.cjs','cloud_relay_worker.js',
+                'test_cloud_relay.cjs','CLOUD_RELAY.md']
 
 
 def command(args, cwd=BASE, check=True):

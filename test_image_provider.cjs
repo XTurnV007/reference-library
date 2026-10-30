@@ -7,12 +7,12 @@ const path=require('node:path');
 const PNG='iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+a9FkAAAAASUVORK5CYII=';
 const pause=()=>new Promise(resolve=>setImmediate(resolve));
 
-async function fixture(response,{paused=false,referenceFailure=false}={}){
- const tables=Object.fromEntries(['jobs','works','assets'].map(k=>[k,new Map()])),calls=[],session=new Map();let serial=0,locked=false;
+async function fixture(response,{paused=false,referenceFailure=false,healthFailure=false}={}){
+ const tables=Object.fromEntries(['jobs','works','assets'].map(k=>[k,new Map()])),calls=[],healthCalls=[],session=new Map();let serial=0,locked=false;
  const storage={all:async t=>structuredClone([...tables[t].values()]),get:async(t,id)=>structuredClone(tables[t].get(id)),put:async(t,value)=>{tables[t].set(value.id,structuredClone(value));},upload:async(kind,file)=>{const value={id:'asset'+(++serial),kind,blob:file};tables.assets.set(value.id,value);return value;}};
  class File extends Blob{constructor(parts,name,options){super(parts,options);this.name=name;}}
  const context={window:{},navigator:{locks:{request:async(name,options,callback)=>{if(locked)return callback(null);locked=true;try{return await callback({name});}finally{locked=false;}}}},localStorage:{getItem:()=>null,setItem:()=>{}},sessionStorage:{getItem:k=>session.get(k),setItem:(k,v)=>session.set(k,v),removeItem:k=>session.delete(k)},Blob,File,FormData,AbortController,setTimeout,clearTimeout,atob,
- fetch:async(url,options)=>{calls.push({url,options});return response?response(calls.length,url,options):new Response(JSON.stringify({data:{b64_json:PNG}}),{status:200});}};
+ fetch:async(url,options)=>{if(url.endsWith('/health')){healthCalls.push({url,options});if(healthFailure)throw new TypeError('relay unavailable');return new Response(JSON.stringify({ok:true,service:'reference-library-image-relay',upstream:'https://ai.cursorai.art/v1/images/edits'}),{status:200});}calls.push({url,options});return response?response(calls.length,url,options):new Response(JSON.stringify({data:{b64_json:PNG}}),{status:200});}};
  let source=fs.readFileSync(path.join(__dirname,'static/image-provider.js'),'utf8');
  assert.ok(source.includes('const GENERATION_PAUSED=false;'));
  // Exercise the pause switch only inside the isolated VM with mocked fetch.
@@ -23,7 +23,7 @@ async function fixture(response,{paused=false,referenceFailure=false}={}){
  provider.configure('offline-secret',false);
  const params={person:{source:'upload',id:'person'},cloth:{source:'upload',id:'cloth'},poses:[{source:'upload',id:'pose'}],model:'gpt-image-2',width:1024,height:1536,quality:'high',variants:1,prompt:'白色背景'};
  async function terminal(id){for(let i=0;i<200;i++){const job=await provider.request('/jobs/'+id);if(!['queued','running'].includes(job.status)){await pause();return job;}await pause();}throw new Error('Fixture did not finish');}
- return {provider,storage,tables,calls,session,params,terminal};
+ return {provider,storage,tables,calls,healthCalls,session,params,terminal};
 }
 
 test('three repeated image fields, one output, object response, no persisted key',async()=>{
@@ -69,13 +69,14 @@ test('upstream 401 does not leak response contents and halts the batch',async()=
  assert.equal(result.status,'interrupted');assert.ok(!result.tasks[0].error.includes('offline-secret'));assert.equal(f.calls.length,1);
 });
 
-test('all generation requests go directly to the fixed provider, with no loopback health request',async()=>{
+test('generation goes to the fixed cloud relay, with no loopback or direct-provider call',async()=>{
  const f=await fixture();
  // Extra legacy mode arguments must not restore the removed loopback route.
  f.provider.configure('offline-secret',false,'local');
  const job=await f.provider.request('/generations',{params:f.params,idempotency_key:'direct-only'});
  assert.equal((await f.terminal(job.id)).status,'done');assert.equal(f.calls.length,1);
- assert.equal(f.calls[0].url,'https://ai.cursorai.art/v1/images/edits');assert.equal(f.calls[0].options.method,'POST');
+ assert.equal(f.calls[0].url,'https://reference-library-image-relay.amberlyric256.chatgpt.site/v1/images/edits');assert.equal(f.calls[0].options.method,'POST');
+ assert.equal(f.healthCalls.length,1);assert.equal(f.healthCalls[0].options.headers,undefined);
 });
 
 test('startup marks an unfinished batch interrupted without a provider call',async()=>{
@@ -103,4 +104,10 @@ test('HTTP 404 halts the batch and cannot be resubmitted using retry',async()=>{
  const job=await f.provider.request('/generations',{params:f.params,idempotency_key:'http404'});const result=await f.terminal(job.id);
  assert.equal(result.status,'interrupted');assert.equal(result.tasks[1].status,'cancelled');assert.equal(f.calls.length,1);
  await assert.rejects(f.provider.request('/jobs/'+job.id+'/retry',{idempotency_key:'http404retry'}),/没有可重试/);assert.equal(f.calls.length,1);
+});
+
+test('unavailable cloud health blocks submission without sending the key or images',async()=>{
+ const f=await fixture(undefined,{healthFailure:true});
+ await assert.rejects(f.provider.request('/generations',{params:f.params,idempotency_key:'relaydown'}),/尚未提交/);
+ assert.equal(f.calls.length,0);assert.equal(f.tables.jobs.size,0);assert.equal(f.healthCalls[0].options.headers,undefined);
 });
