@@ -2,7 +2,7 @@
 // This adapter uses the supplied third-party contract, not OpenAI's public API.
 window.ReferenceImageProvider = (() => {
  const ENDPOINT='https://ai.cursorai.art/v1/images/edits';
- const GENERATION_PAUSED=true;
+ const GENERATION_PAUSED=false;
  const PAUSE_REASON='生图提交已暂停：正在核对 HTTP 404 与扣费问题。请勿重试；素材、草稿和已有作品仍可使用。';
  const SESSION_KEY='reference-platform.cursor-key';
  const sizes=[[1024,1536],[1024,1024],[1536,1024],[2048,2048],[2048,1152],[3840,2160],[2160,3840]];
