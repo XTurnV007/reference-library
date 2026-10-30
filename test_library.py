@@ -166,13 +166,17 @@ class LibraryTests(unittest.TestCase):
         self.assertTrue(item['preview'].startswith('./images/'))
         self.assertTrue(item['original'].startswith(('https://github.com/example/reference-library/releases/download/originals-',
                                                      'https://raw.githubusercontent.com/example/reference-library/original-images/')))
-        html=(output/'index.html').read_text(encoding='utf-8')
+        html=(output/'gallery.html').read_text(encoding='utf-8')
         self.assertIn('src="./static-api.js"',html)
         self.assertIn('src="./analytics.js"',html)
         self.assertIn('href="./analytics.css"',html)
         self.assertNotIn('href="/style.css"',html)
         self.assertTrue((output/'analytics-config.json').is_file())
         self.assertFalse((output/'analytics-secret.bin').exists())
+        platform=(output/'index.html').read_text(encoding='utf-8')
+        self.assertIn('data-runtime="browser"',platform)
+        self.assertIn('platform.js',platform)
+        self.assertTrue((output/'studio.html').is_file())
         self.assertTrue(manifest.is_file())
         self.assertFalse((output/'.publish-state.json').exists())
         with connect(root) as db:

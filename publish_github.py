@@ -15,7 +15,9 @@ from library import DEFAULT_DATA, crawl_lock, file_hash
 SOURCE_FILES = ['.gitignore','README.md','PUBLISH.md','crawler.py','library.py','server.py',
                 'verify.py','test_library.py','build_static.py','publish_github.py',
                 'static/index.html','static/style.css','static/app.js','web/static-api.js',
-                'static/analytics.js','static/analytics.css','analytics.py','analytics_server.py','test_analytics.py','ANALYTICS.md']
+                'static/analytics.js','static/analytics.css','analytics.py','analytics_server.py','test_analytics.py','ANALYTICS.md',
+                'studio.py','test_studio.py','PLATFORM.md','AI_STUDIO_PLAN.md',
+                'static/platform.html','static/platform.js','static/platform.css']
 
 
 def command(args, cwd=BASE, check=True):
@@ -131,13 +133,15 @@ def archive_push(repo,originals,directory,account):
 
 
 def pages_push(repo, directory, account):
-    expected_commit=directory_push(repo,directory,account,'gh-pages','Update public static gallery')
     current=command(['gh','api',f'repos/{repo}/pages'],check=False)
     if current.returncode==0:
         page=json.loads(current.stdout)
         if page.get('source',{}).get('branch')!='gh-pages' or page.get('build_type')=='workflow':
             raise ValueError('目标仓库已有不同 Pages 配置，未覆盖；请在 Settings → Pages 选择 gh-pages 分支 / 根目录')
-    else:
+        if page.get('cname'):
+            (directory/'CNAME').write_text(page['cname']+'\n',encoding='utf-8')
+    expected_commit=directory_push(repo,directory,account,'gh-pages','Update public creative platform')
+    if current.returncode!=0:
         command(['gh','api',f'repos/{repo}/pages','--method','POST','-f','build_type=legacy',
                  '-f','source[branch]=gh-pages','-f','source[path]=/'])
     page=gh_json('api',f'repos/{repo}/pages')
@@ -175,9 +179,11 @@ def publish(args):
             manifest=json.loads(manifest_path.read_text(encoding='utf-8'))
         print('上传源代码…',flush=True)
         source_push(args.repo,account)
-        print('上传原图；可中断，重新执行将跳过已完成文件…',flush=True)
-        originals_upload(args.repo,manifest['originals'])
-        archive_push(args.repo,manifest['originals'],Path(temporary)/'original-images',account)
+        if not args.site_only:
+            print('上传原图；可中断，重新执行将跳过已完成文件…',flush=True)
+            originals_upload(args.repo,manifest['originals'])
+            archive_push(args.repo,manifest['originals'],Path(temporary)/'original-images',account)
+        else:print('本次仅更新网站与源码，沿用已发布原图。',flush=True)
         print('发布静态网页与预览图…',flush=True)
         pages_push(args.repo,directory,account)
 
@@ -189,6 +195,7 @@ if __name__=='__main__':
     parser.add_argument('--authorized-images',action='store_true')
     parser.add_argument('--analytics-url',default=None,help='共享统计服务的 HTTPS 基础地址')
     parser.add_argument('--archive-from',default='d',choices=['none',*'0123456789abcdef'])
+    parser.add_argument('--site-only',action='store_true',help='仅更新网站与代码，原图须已按同一分组策略上传')
     try:publish(parser.parse_args())
     except (Exception,KeyboardInterrupt) as exc:
         print('\n发布未完成：'+(str(exc) or '用户中断；重新执行可续传'),file=sys.stderr)

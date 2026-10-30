@@ -40,11 +40,15 @@ def build(root, output, repository, analytics_url=None, archive_from='d'):
     html=html.replace('服装站禁止图片数据的再分发、转载与转售。','本图库由发布者在取得授权后公开；不代表访问者取得转载授权。本项目与原站无隶属关系。')
     # Keep the shared UI's hidden sync dialog and event bindings intact.
     html=html.replace('<div class="header-actions">','<button id="openSync" hidden>采集</button><div class="header-actions">')
-    (output/'index.html').write_text(html,encoding='utf-8')
+    (output/'gallery.html').write_text(html,encoding='utf-8')
+    platform=(BASE/'static/platform.html').read_text(encoding='utf-8').replace('data-runtime="server"','data-runtime="browser"')
+    (output/'index.html').write_text(platform,encoding='utf-8')
+    (output/'studio.html').write_text(platform,encoding='utf-8')
     for src, name in [(BASE/'static/style.css','style.css'),(BASE/'static/app.js','app.js'),
                       (BASE/'static/analytics.js','analytics.js'),(BASE/'web/static-api.js','static-api.js')]:
         shutil.copy2(src,output/name)
     shutil.copy2(BASE/'static/analytics.css',output/'analytics.css')
+    for name in ('platform.js','platform.css'):shutil.copy2(BASE/'static'/name,output/name)
     (output/'analytics-config.json').write_text(json.dumps({'base_url':analytics_url.rstrip('/')}),encoding='utf-8')
     (output/'.nojekyll').touch()
     items, originals, missing = [], {}, []

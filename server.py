@@ -7,6 +7,7 @@ import logging
 import mimetypes
 import threading
 import urllib.parse
+import time
 from datetime import datetime,timedelta
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -14,9 +15,11 @@ from pathlib import Path
 from crawler import SOURCES, crawl
 from analytics import Analytics, RateLimited, TZ
 from library import DEFAULT_DATA, connect, crawl_lock, init, local_path, serialize_item
+from studio import Studio,ModelUnavailable,MAX_UPLOAD
 
 STATIC = Path(__file__).parent / 'static'
 JOB_LOCK = threading.Lock()
+STUDIO_LOCK=threading.Lock()
 
 
 def filters(params):
@@ -84,6 +87,55 @@ class Handler(BaseHTTPRequestHandler):
     def trusted_host(self):
         return self.headers.get('Host', '') in self.server.allowed_hosts
 
+    def studio(self):
+        with STUDIO_LOCK:
+            if not hasattr(self.server,'studio_service'):
+                self.server.studio_service=Studio(self.server.data_root)
+        return self.server.studio_service
+
+    def studio_get(self,path,params):
+        service=self.studio()
+        if path=='/api/studio/status':return self.reply(service.status())
+        if path=='/api/studio/assets':return self.reply({'assets':service.assets(params.get('kind',''))})
+        if path=='/api/studio/drafts':return self.reply({'drafts':service.drafts()})
+        if path=='/api/studio/works':return self.reply({'works':service.works()})
+        if path=='/api/studio/jobs':return self.reply({'jobs':service.jobs()})
+        if path.startswith('/api/studio/jobs/'):
+            return self.reply(service.job(urllib.parse.unquote(path.rsplit('/',1)[1])))
+        if path.startswith('/api/studio/files/'):
+            image=service.file(path.rsplit('/',1)[1])
+            return self.send_file(image,download=params.get('download')=='1',filename='studio-image'+image.suffix)
+        if path=='/api/studio/events':
+            job_id=params.get('id','');snapshot=service.job(job_id)
+            after=max(0,int(params.get('after',self.headers.get('Last-Event-ID','0'))))
+            self.send_response(200);self.send_header('Content-Type','text/event-stream; charset=utf-8')
+            self.send_header('Cache-Control','no-store');self.send_header('X-Accel-Buffering','no');self.end_headers()
+            def send(name,payload,event_id=None):
+                text=(f'id: {event_id}\n' if event_id else '')+'event: '+name+'\ndata: '+json.dumps(payload,ensure_ascii=False)+'\n\n'
+                self.wfile.write(text.encode());self.wfile.flush()
+            send('snapshot',snapshot)
+            deadline=time.monotonic()+20
+            while time.monotonic()<deadline:
+                events=service.events(job_id,after)
+                for event in events:send(event['event'],event['payload'],event['id']);after=event['id']
+                if service.job(job_id)['status'] not in ('queued','running'):break
+                self.wfile.write(b': heartbeat\n\n');self.wfile.flush();time.sleep(1)
+            return
+        return self.reply({'error':'接口不存在'},404)
+
+    def studio_post(self,path,body):
+        service=self.studio()
+        if path=='/api/studio/drafts':return self.reply(service.save_draft(body))
+        if path=='/api/studio/assets/edit':return self.reply(service.edit('asset',body))
+        if path=='/api/studio/works/import':return self.reply(service.import_work(body))
+        if path=='/api/studio/works/edit':return self.reply(service.edit('work',body))
+        if path=='/api/studio/generations':return self.reply(service.create(body),202)
+        if path.startswith('/api/studio/jobs/'):
+            parts=path.split('/')
+            if len(parts)==6 and parts[5] in ('cancel','retry'):
+                return self.reply(service.cancel(parts[4]) if parts[5]=='cancel' else service.retry(parts[4],body))
+        return self.reply({'error':'接口不存在'},404)
+
     def do_GET(self):
         if not self.trusted_host():
             return self.reply({'error': '仅允许本机地址访问'}, 403)
@@ -103,6 +155,8 @@ class Handler(BaseHTTPRequestHandler):
         url = urllib.parse.urlsplit(self.path)
         params = {k: v[0] for k, v in urllib.parse.parse_qs(url.query).items()}
         root = self.server.data_root
+        if url.path.startswith('/api/studio/'):
+            return self.studio_get(url.path,params)
         if url.path.startswith('/api/analytics/'):
             if not hasattr(self.server,'analytics'):
                 self.server.analytics = Analytics(root)
@@ -166,7 +220,10 @@ class Handler(BaseHTTPRequestHandler):
             path = local_path(root, asset['path'])
             return self.send_file(path, download=params.get('download') == '1',
                                   filename=item_id.replace(':', '_') + path.suffix)
-        files = {'/': 'index.html', '/app.js': 'app.js', '/style.css': 'style.css',
+        files = {'/': 'platform.html','/studio':'platform.html','/studio.html':'platform.html',
+                 '/gallery':'index.html','/gallery.html':'index.html',
+                 '/platform.js':'platform.js','/platform.css':'platform.css',
+                 '/app.js': 'app.js', '/style.css': 'style.css',
                  '/analytics.js':'analytics.js','/analytics.css':'analytics.css'}
         if url.path not in files:
             return self.reply({'error': '页面不存在'}, 404)
@@ -193,17 +250,24 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_POST(self):
         origin = self.headers.get('Origin')
+        request_url=urllib.parse.urlsplit(self.path)
+        studio_upload=request_url.path=='/api/studio/uploads'
         if (not self.trusted_host() or (origin and origin != 'http://' + self.headers.get('Host', ''))
                 or self.headers.get('Sec-Fetch-Site') == 'cross-site'
-                or self.headers.get('Content-Type', '').split(';')[0] != 'application/json'):
+                or (not studio_upload and self.headers.get('Content-Type', '').split(';')[0] != 'application/json')):
             return self.reply({'error': '请求来源不受信任'}, 403)
         try:
             length = int(self.headers.get('Content-Length', '0'))
-            if not 0 < length <= 256 * 1024:
+            if not 0 < length <= (MAX_UPLOAD if studio_upload else 256 * 1024):
                 raise ValueError('请求大小无效')
+            if studio_upload:
+                values={k:v[0] for k,v in urllib.parse.parse_qs(request_url.query).items()}
+                return self.reply(self.studio().upload(values.get('kind',''),values.get('name','图片'),self.rfile.read(length)),201)
             body = json.loads(self.rfile.read(length))
             if not isinstance(body, dict):
                 raise ValueError('请求必须是 JSON 对象')
+            if request_url.path.startswith('/api/studio/'):
+                return self.studio_post(request_url.path,body)
             if self.path == '/api/analytics/events':
                 if not hasattr(self.server,'analytics'):
                     self.server.analytics = Analytics(self.server.data_root)
@@ -241,6 +305,8 @@ class Handler(BaseHTTPRequestHandler):
                 threading.Thread(target=work, daemon=True).start()
                 return self.reply({'ok': True, 'message': '采集任务已提交，进度稍后显示'}, 202)
             self.reply({'error': '接口不存在'}, 404)
+        except ModelUnavailable as exc:
+            self.reply({'error':str(exc)},503)
         except RateLimited as exc:
             self.reply({'error':str(exc)},429)
         except (ValueError, KeyError, TypeError) as exc:
@@ -260,6 +326,7 @@ if __name__ == '__main__':
     server = ThreadingHTTPServer(('127.0.0.1', args.port), Handler)
     server.data_root = args.data.resolve()
     server.analytics = Analytics(server.data_root)
+    server.studio_service=Studio(server.data_root)
     server.allowed_hosts = {f'localhost:{args.port}', f'127.0.0.1:{args.port}'}
     logging.info('打开 http://127.0.0.1:%d ，数据目录 %s', args.port, server.data_root)
     try:
@@ -268,3 +335,4 @@ if __name__ == '__main__':
         pass
     finally:
         server.server_close()
+        server.studio_service.close()
