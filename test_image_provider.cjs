@@ -16,7 +16,7 @@ async function fixture(response){
  vm.runInNewContext(fs.readFileSync(path.join(__dirname,'static/image-provider.js'),'utf8'),context);
  const provider=context.window.ReferenceImageProvider;
  await provider.initialize({storage,reference:async()=>({blob:new Blob([Buffer.from(PNG,'base64')],{type:'image/png'}),note:''}),notify:()=>{},newId:()=>('id'+(++serial)),copy:structuredClone});
- provider.configure('offline-secret',false,'direct');
+ provider.configure('offline-secret',false);
  const params={person:{source:'upload',id:'person'},cloth:{source:'upload',id:'cloth'},poses:[{source:'upload',id:'pose'}],model:'gpt-image-2',width:1024,height:1536,quality:'high',variants:1,prompt:'白色背景'};
  async function terminal(id){for(let i=0;i<200;i++){const job=await provider.request('/jobs/'+id);if(!['queued','running'].includes(job.status)){await pause();return job;}await pause();}throw new Error('Fixture did not finish');}
  return {provider,storage,tables,calls,session,params,terminal};
@@ -46,7 +46,7 @@ test('network uncertainty stops remaining tasks and forbids automatic retry',asy
 test('invalid configuration fails before any paid request',async()=>{
  const f=await fixture();f.params.width=1536;f.params.height=2048;
  await assert.rejects(f.provider.request('/generations',{params:f.params,idempotency_key:'bad'}),/尺寸/);assert.equal(f.calls.length,0);
- f.provider.configure('',false,'direct');await assert.rejects(f.provider.request('/generations',{params:f.params,idempotency_key:'no-key'}),/API Key/);assert.equal(f.calls.length,0);
+ f.provider.configure('',false);await assert.rejects(f.provider.request('/generations',{params:f.params,idempotency_key:'no-key'}),/API Key/);assert.equal(f.calls.length,0);
 });
 
 test('in-flight batch excludes another batch; cancellation preserves current result',async()=>{
@@ -65,10 +65,13 @@ test('upstream 401 does not leak response contents and halts the batch',async()=
  assert.equal(result.status,'failed');assert.ok(!result.tasks[0].error.includes('offline-secret'));assert.equal(f.calls.length,1);
 });
 
-test('local mode checks the relay without a key before sending any image',async()=>{
- const f=await fixture(()=>{throw new TypeError('relay not started');});f.provider.configure('offline-secret',false,'local');
- await assert.rejects(f.provider.request('/generations',{params:f.params,idempotency_key:'no-relay'}),/尚未提交/);
- assert.equal(f.calls.length,1);assert.equal(f.calls[0].url,'http://127.0.0.1:8766/health');assert.equal(f.calls[0].options.headers,undefined);assert.equal(f.tables.jobs.size,0);
+test('all generation requests go directly to the fixed provider, with no loopback health request',async()=>{
+ const f=await fixture();
+ // Extra legacy mode arguments must not restore the removed loopback route.
+ f.provider.configure('offline-secret',false,'local');
+ const job=await f.provider.request('/generations',{params:f.params,idempotency_key:'direct-only'});
+ assert.equal((await f.terminal(job.id)).status,'done');assert.equal(f.calls.length,1);
+ assert.equal(f.calls[0].url,'https://ai.cursorai.art/v1/images/edits');assert.equal(f.calls[0].options.method,'POST');
 });
 
 test('startup marks an unfinished batch interrupted without a provider call',async()=>{
