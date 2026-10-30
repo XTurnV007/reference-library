@@ -1,6 +1,6 @@
 # 本地参考图书馆
 
-需要公开部署到 GitHub Pages 时，请阅读 [发布说明](PUBLISH.md)。静态版将预览图放在 Pages、原图放在 Releases；个人标记仅保存在浏览器。
+需要公开部署到 GitHub Pages 时，请阅读 [发布说明](PUBLISH.md)。静态版将预览图放在 Pages、原图放在 Releases 和独立资源分支；个人标记仅保存在浏览器。
 
 点击趋势、热门排行榜和共享统计 API 的使用及部署见 [统计说明](ANALYTICS.md)。本地站重启后即可使用；公开静态站需单独配置统计服务。
 

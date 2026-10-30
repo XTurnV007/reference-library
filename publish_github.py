@@ -1,4 +1,4 @@
-"""Publish code, original images (Releases), and a static gallery (GitHub Pages)."""
+"""Publish code, original images, and a static gallery on GitHub Pages."""
 from __future__ import annotations
 import argparse
 import json

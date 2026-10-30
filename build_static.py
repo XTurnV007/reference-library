@@ -1,4 +1,4 @@
-"""Export a public static gallery; originals live in sharded GitHub Releases."""
+"""Export a public gallery; originals use GitHub Releases and a separate asset branch."""
 from __future__ import annotations
 import argparse
 import json

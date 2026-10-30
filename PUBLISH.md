@@ -69,7 +69,7 @@ cd F:\start_your_own_bussiness\self_media\AIIP\reference_library
 
 ## 验证
 
-本轮按项目约定未执行程序、测试或上传；请先运行：
+回归测试按项目约定由你执行；发布前建议先运行：
 
 ```powershell
 & "G:\python311\python.exe" -m unittest -v
