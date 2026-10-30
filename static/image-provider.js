@@ -2,6 +2,8 @@
 // This adapter uses the supplied third-party contract, not OpenAI's public API.
 window.ReferenceImageProvider = (() => {
  const ENDPOINT='https://ai.cursorai.art/v1/images/edits';
+ const GENERATION_PAUSED=true;
+ const PAUSE_REASON='生图提交已暂停：正在核对 HTTP 404 与扣费问题。请勿重试；素材、草稿和已有作品仍可使用。';
  const SESSION_KEY='reference-platform.cursor-key';
  const sizes=[[1024,1536],[1024,1024],[1536,1024],[2048,2048],[2048,1152],[3840,2160],[2160,3840]];
  const models=['gpt-image-2','gpt-image-2-all','gpt-image-1','gpt-image-1-all','flux-kontext-pro','flux-kontext-max'].map(id=>({id,label:id,sizes,max_refs:3,max_tasks:80}));
@@ -14,7 +16,7 @@ window.ReferenceImageProvider = (() => {
   key=next;verified=false;
   try{if(remember&&key)sessionStorage.setItem(SESSION_KEY,key);else sessionStorage.removeItem(SESSION_KEY);}catch(_){throw new Error('浏览器无法保存会话密钥，请取消会话保存后重试');}
  }
- function info(){return {endpoint:ENDPOINT,configured:!!key,verified,models:key?models:[],generation_available:!!key,message:key?'浏览器直接将三张参考图发送至 ai.cursorai.art。每张结果独立返回；请保持此标签页打开。':'请在设置中填写 API Key，启用多图生成功能。'};}
+ function info(){return {endpoint:ENDPOINT,configured:!!key,verified,paused:GENERATION_PAUSED,models:key?models:[],generation_available:!!key&&!GENERATION_PAUSED,message:GENERATION_PAUSED?PAUSE_REASON:key?'浏览器直接将三张参考图发送至 ai.cursorai.art。每张结果独立返回；请保持此标签页打开。':'请在设置中填写 API Key，启用多图生成功能。'};}
  function changed(id){notify(id);}
  function withLock(callback){if(!navigator.locks)throw new Error('浏览器不支持任务锁，请使用新版 Chrome、Edge 或 Firefox');return navigator.locks.request(lockName,{ifAvailable:true},callback);}
  async function initialize(options){
@@ -52,7 +54,7 @@ window.ReferenceImageProvider = (() => {
    catch(_){const error=new Error('浏览器直连接口失败：可能是网络中断、超时或供应商跨域配置。供应商可能已处理请求，请先核对账单；未自动重发。若浏览器控制台提示 CORS，请联系供应商允许本站来源及 Authorization 请求头。');error.uncertain=true;throw error;}
    if(!response.ok){
     const message=response.status===401||response.status===403?'密钥无效或账号无权限':response.status===429?'请求受限或额度不足':response.status===413?'图片体积超出供应商限制':'供应商返回错误';
-    const error=new Error(`${message}（HTTP ${response.status}），请查看供应商后台。`);error.stop=true;if(response.status>=500)error.uncertain=true;throw error;
+    const error=new Error(`${message}（HTTP ${response.status}）。HTTP 错误不能证明未计费，请先核对供应商记录；此项禁止直接重试。`);error.uncertain=true;throw error;
    }
    // Reading/decoding can fail after the request has been accepted; never auto-retry.
    try{const result=await response.json(),blob=await decode(result);verified=true;return blob;}
@@ -64,6 +66,7 @@ window.ReferenceImageProvider = (() => {
   try{
    job.status='running';await save(job);
    for(const task of job.tasks){
+    if(GENERATION_PAUSED){job.cancel_requested=true;}
     const saved=await storage.get('jobs',job.id);if(saved.cancel_requested)job.cancel_requested=true;
     if(job.cancel_requested){task.status='cancelled';await save(job);continue;}
     task.status='running';await save(job);
@@ -103,6 +106,7 @@ window.ReferenceImageProvider = (() => {
   if(typeof params.prompt!=='string'||params.prompt.length>6000)throw new Error('补充描述最多 6000 字');
  }
  async function create(body,retryTasks){
+  if(GENERATION_PAUSED)throw new Error(PAUSE_REASON);
   validate(body.params);const token=key;
   // Hold a browser-wide lock for the entire paid batch, but return the job at once.
   return new Promise((resolve,reject)=>{
@@ -127,6 +131,7 @@ window.ReferenceImageProvider = (() => {
   const job=await storage.get('jobs',match[1]);if(!job)throw new Error('任务不存在');
   if(match[2]==='cancel'){job.cancel_requested=true;await save(job);return {message:'已停止后续任务；已提交给供应商的当前图片仍可能完成并计费。'};}
   if(match[2]==='retry'){
+   if(GENERATION_PAUSED)throw new Error(PAUSE_REASON);
    if(['queued','running'].includes(job.status))throw new Error('请等待当前批次结束');
    const tasks=job.tasks.filter(t=>t.status==='failed');if(!tasks.length)throw new Error('没有可重试的失败项；中断项请先核对供应商结果');
    return create({params:job.params,idempotency_key:body.idempotency_key,title:'重试作品'},tasks);

@@ -1,5 +1,7 @@
 # 本地参考图书馆
 
+**生图提交当前暂停**：正在核对 HTTP 404 与供应商消费记录；生成和重试均不会提交新请求。原图不可读也不再以预览图替代。素材、草稿和已有作品功能保留。详见 [当前状态](IMAGE_API.md)。
+
 在线图库：<https://xturnv007.github.io/reference-library/> · 源码：<https://github.com/XTurnV007/reference-library>
 
 已发布 2,846 张图片记录及其原图、预览版本。公开图库无需本机持续运行；共享点击统计需要另外部署统计 API 并在发布时配置地址。
