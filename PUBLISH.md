@@ -10,9 +10,10 @@
 
 - `main` 分支：爬虫、本地管理网站、静态导出与发布程序。
 - `gh-pages` 分支：约 152 MB 的缩略图、预览图，以及网页和公开索引。
-- `originals-0` 到 `originals-f` Releases：原始 PNG 按 SHA-256 首位分成 16 组。单个 Release 最多 1,000 个文件，当前每组远低于上限。
+- `originals-0` 到 `originals-c` Releases：大部分原始 PNG 按 SHA-256 首位分组，单个 Release 最多 1,000 个文件。
+- `original-images` 分支：哈希首位为 d/e/f 的原图，当前 543 张、约 386 MB。网页直接读取该分支的固定 raw 地址，减少上传数千个文件时的 API 配额消耗。该分支不计入 Pages 站点体积。
 
-网页点击详情和下载时访问 Releases 原图，服装详情优先使用站点内 WebP 预览。同组姿势可切换角度。图片不热链原站，因此访问不依赖原站继续运行，但仍依赖 GitHub 服务、网络和账号状态；不保证永久托管或任何地区的访问速度。
+网页点击详情和下载时访问 Releases 或资源分支的原图，服装详情优先使用站点内 WebP 预览。同组姿势可切换角度。图片不热链原站，因此访问不依赖原站继续运行，但仍依赖 GitHub 服务、网络和账号状态；不保证永久托管或任何地区的访问速度。下载资源分支原图时，部分浏览器可能先打开图片，可用图片菜单另存为。
 
 公开清单使用字段白名单，**不发布本地 SQLite、个人收藏、标签、备注和回收站中的记录**。未隐藏的下载图片会公开。发布前请先停止采集；程序会拒绝缺失或未下载完整的文件。
 
@@ -36,6 +37,8 @@ cd F:\start_your_own_bussiness\self_media\AIIP\reference_library
 `--authorized-images` 表示发布者确认已取得所发布图片的公开发布授权。程序会创建公开仓库 `XTurnV007/reference-library`，上传代码和原图，推送静态页面，并配置 GitHub Pages。如果该名称已经属于其他项目，程序会停止，不覆盖已有项目。
 
 上传原图约 2.06 GB，首次上传可能较久。每批 20 个文件后输出进度，已存在且大小及可用远端摘要一致的文件跳过；中断后运行相同命令即可继续。不要同时运行多个发布进程。GitHub API 限流或网络错误时可稍后重试。
+
+默认 `--archive-from d` 将末三组原图放到资源分支，减少 API 请求；后续发布应保持相同分组。`build_static.py` 默认也采用此策略。只有确定配额充足且有意迁移时才改为 `--archive-from none`（全部走 Releases）。仅克隆源码时建议 `git clone --single-branch --branch main https://github.com/XTurnV007/reference-library.git`，避免下载资源分支。
 
 脚本输出的仓库地址为真实仓库地址，Pages 地址先标为待构建。只有 GitHub 返回当前网页提交已构建完成，脚本才报告「Pages 构建已完成」。等待超时不代表失败，可在仓库 Actions 查看。
 

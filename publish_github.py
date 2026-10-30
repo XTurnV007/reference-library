@@ -62,7 +62,8 @@ def source_push(repo, account):
 
 def originals_upload(repo, originals):
     groups={}
-    for asset in originals:groups.setdefault(asset['tag'],[]).append(asset)
+    for asset in originals:
+        if asset.get('storage','release')=='release':groups.setdefault(asset['tag'],[]).append(asset)
     for tag, assets in sorted(groups.items()):
         if len(assets)>1000:raise ValueError('单组原图超过 Releases 的 1000 文件限制，请增加分组位数')
         response=command(['gh','api',f'repos/{repo}/releases/tags/{tag}'],check=False)
@@ -94,22 +95,43 @@ def originals_upload(repo, originals):
             print(f'{tag} 本次上传 {min(offset+20,len(pending))}/{len(pending)}',flush=True)
 
 
-def pages_push(repo, directory, account):
-    command(['git','init','-b','gh-pages'],directory)
+def directory_push(repo, directory, account, branch, message):
+    command(['git','init','-b',branch],directory)
     command(['git','config','user.name',account['login']],directory)
     command(['git','config','user.email',f"{account['id']}+{account['login']}@users.noreply.github.com"],directory)
     command(['git','remote','add','origin',f'https://github.com/{repo}.git'],directory)
-    exists=command(['git','ls-remote','--exit-code','--heads','origin','gh-pages'],directory,check=False)
+    exists=command(['git','ls-remote','--exit-code','--heads','origin',branch],directory,check=False)
     if exists.returncode==0:
-        command(['git','fetch','--depth=1','origin','gh-pages'],directory)
+        command(['git','fetch','--depth=1','origin',branch],directory)
         command(['git','reset','--mixed','FETCH_HEAD'],directory)
     elif exists.returncode!=2:raise RuntimeError(exists.stderr)
     command(['git','add','--all'],directory)
     dirty=command(['git','diff','--cached','--quiet'],directory,check=False)
-    if dirty.returncode==1:command(['git','commit','-m','Update public static gallery'],directory)
+    if dirty.returncode==1:command(['git','commit','-m',message],directory)
     elif dirty.returncode!=0:raise RuntimeError(dirty.stderr)
-    command(['git','push','origin','HEAD:gh-pages'],directory)
-    expected_commit=command(['git','rev-parse','HEAD'],directory).stdout.strip()
+    command(['git','push','origin','HEAD:'+branch],directory)
+    return command(['git','rev-parse','HEAD'],directory).stdout.strip()
+
+
+def archive_push(repo,originals,directory,account):
+    selected=[a for a in originals if a.get('storage')=='git']
+    if not selected:return
+    directory.mkdir(parents=True,exist_ok=True)
+    for index,asset in enumerate(selected,1):
+        source=Path(asset['path'])
+        if not source.is_file() or file_hash(source)!=asset['sha256']:
+            raise ValueError('原图校验失败：'+source.name)
+        target=(directory/asset['relative']).resolve()
+        if not target.is_relative_to(directory.resolve()/'images'):
+            raise ValueError('无效资源路径')
+        target.parent.mkdir(parents=True,exist_ok=True);shutil.copy2(source,target)
+        if index%100==0:print(f'资源分支准备 {index}/{len(selected)}',flush=True)
+    print(f'推送 {len(selected)} 张原图到 original-images 分支…',flush=True)
+    directory_push(repo,directory,account,'original-images','Publish original image archive')
+
+
+def pages_push(repo, directory, account):
+    expected_commit=directory_push(repo,directory,account,'gh-pages','Update public static gallery')
     current=command(['gh','api',f'repos/{repo}/pages'],check=False)
     if current.returncode==0:
         page=json.loads(current.stdout)
@@ -149,12 +171,13 @@ def publish(args):
     with tempfile.TemporaryDirectory(prefix='reference-gallery-publish-') as temporary:
         directory=Path(temporary)/'site'
         with crawl_lock(args.data):
-            manifest_path=build(args.data,directory,args.repo,args.analytics_url)
+            manifest_path=build(args.data,directory,args.repo,args.analytics_url,args.archive_from)
             manifest=json.loads(manifest_path.read_text(encoding='utf-8'))
         print('上传源代码…',flush=True)
         source_push(args.repo,account)
         print('上传原图；可中断，重新执行将跳过已完成文件…',flush=True)
         originals_upload(args.repo,manifest['originals'])
+        archive_push(args.repo,manifest['originals'],Path(temporary)/'original-images',account)
         print('发布静态网页与预览图…',flush=True)
         pages_push(args.repo,directory,account)
 
@@ -165,6 +188,7 @@ if __name__=='__main__':
     parser.add_argument('--data',type=Path,default=DEFAULT_DATA)
     parser.add_argument('--authorized-images',action='store_true')
     parser.add_argument('--analytics-url',default=None,help='共享统计服务的 HTTPS 基础地址')
+    parser.add_argument('--archive-from',default='d',choices=['none',*'0123456789abcdef'])
     try:publish(parser.parse_args())
     except (Exception,KeyboardInterrupt) as exc:
         print('\n发布未完成：'+(str(exc) or '用户中断；重新执行可续传'),file=sys.stderr)

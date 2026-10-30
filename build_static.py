@@ -12,9 +12,11 @@ from library import DEFAULT_DATA, connect, local_path
 BASE = Path(__file__).resolve().parent
 
 
-def build(root, output, repository, analytics_url=None):
+def build(root, output, repository, analytics_url=None, archive_from='d'):
     if not re.fullmatch(r'[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+', repository):
         raise ValueError('仓库格式应为 owner/repository')
+    if archive_from not in ('none',*'0123456789abcdef'):
+        raise ValueError('无效的原图资源分组')
     analytics_url=analytics_url if analytics_url is not None else os.environ.get('REFERENCE_LIBRARY_ANALYTICS_URL','')
     if analytics_url:
         endpoint=urllib.parse.urlsplit(analytics_url)
@@ -62,8 +64,11 @@ def build(root, output, repository, analytics_url=None):
                     missing.append(f"{row['id']}:{asset['variant']}");continue
                 if asset['variant']=='original':
                     tag='originals-'+asset['sha256'][0]
-                    url=f'https://github.com/{repository}/releases/download/{tag}/{path.name}'
-                    originals[path.name]={'tag':tag,'path':str(path),'sha256':asset['sha256'],'size':asset['size']}
+                    storage='git' if archive_from!='none' and asset['sha256'][0]>=archive_from else 'release'
+                    url=(f'https://raw.githubusercontent.com/{repository}/original-images/{asset["path"]}' if storage=='git'
+                         else f'https://github.com/{repository}/releases/download/{tag}/{path.name}')
+                    originals[path.name]={'tag':tag,'path':str(path),'sha256':asset['sha256'],'size':asset['size'],
+                                          'relative':asset['path'],'storage':storage}
                 else:
                     dest=output/asset['path'];dest.parent.mkdir(parents=True,exist_ok=True)
                     if not dest.exists() or dest.stat().st_size!=path.stat().st_size:shutil.copy2(path,dest)
@@ -93,4 +98,5 @@ if __name__=='__main__':
     p.add_argument('--output',type=Path,default=BASE/'site')
     p.add_argument('--repo',required=True,help='owner/repository')
     p.add_argument('--analytics-url',default=None,help='共享统计 API 的 HTTPS 基础地址')
-    a=p.parse_args();build(a.data,a.output,a.repo,a.analytics_url)
+    p.add_argument('--archive-from',default='d',choices=['none',*'0123456789abcdef'],help='此哈希首位及以后的原图改走独立 Git 资源分支，减少 API 请求')
+    a=p.parse_args();build(a.data,a.output,a.repo,a.analytics_url,a.archive_from)
