@@ -174,7 +174,9 @@ def publish(args):
     account=gh_json('api','user')
     if args.repo.split('/')[0].lower()!=account['login'].lower():raise ValueError('此发布器仅向当前登录者自己的仓库发布')
     command(['gh','auth','setup-git'])
-    with tempfile.TemporaryDirectory(prefix='reference-gallery-publish-') as temporary:
+    if args.temp_dir:
+        args.temp_dir.mkdir(parents=True,exist_ok=True)
+    with tempfile.TemporaryDirectory(prefix='reference-gallery-publish-',dir=args.temp_dir) as temporary:
         directory=Path(temporary)/'site'
         with crawl_lock(args.data):
             manifest_path=build(args.data,directory,args.repo,args.analytics_url,args.archive_from)
@@ -196,8 +198,9 @@ if __name__=='__main__':
     parser.add_argument('--data',type=Path,default=DEFAULT_DATA)
     parser.add_argument('--authorized-images',action='store_true')
     parser.add_argument('--analytics-url',default=None,help='共享统计服务的 HTTPS 基础地址')
-    parser.add_argument('--archive-from',default='d',choices=['none',*'0123456789abcdef'])
+    parser.add_argument('--archive-from',default='0',choices=['none',*'0123456789abcdef'])
     parser.add_argument('--site-only',action='store_true',help='仅更新网站与代码，原图须已按同一分组策略上传')
+    parser.add_argument('--temp-dir',type=Path,default=None,help='临时导出及资源分支目录的父目录；大规模原图迁移时选择空间充足的磁盘')
     try:publish(parser.parse_args())
     except (Exception,KeyboardInterrupt) as exc:
         print('\n发布未完成：'+(str(exc) or '用户中断；重新执行可续传'),file=sys.stderr)

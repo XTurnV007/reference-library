@@ -117,7 +117,7 @@ function validateFile(file){if(!['image/png','image/jpeg','image/webp'].includes
 async function uploadFile(kind,file){validateFile(file);const h=new Uint8Array(await file.slice(0,12).arrayBuffer()),ascii=(start,end)=>String.fromCharCode(...h.slice(start,end));const valid=(h[0]===137&&ascii(1,4)==='PNG')||(h[0]===255&&h[1]===216&&h[2]===255)||(ascii(0,4)==='RIFF'&&ascii(8,12)==='WEBP');if(!valid)throw new Error('文件内容不是支持的 PNG、JPG 或 WebP 图片');if(isBrowser)return browserDB.upload(kind,file);const q=new URLSearchParams({kind,name:file.name.slice(0,180)});const response=await fetch('/api/studio/uploads?'+q,{method:'POST',headers:{'Content-Type':file.type},body:file});const result=await response.json();if(!response.ok)throw new Error(result.error||'上传失败');return result;}
 async function refreshPrivate(){const result=await Promise.all([api('/assets'),api('/works'),api('/drafts'),api('/jobs')]);uploads=result[0].assets;works=result[1].works;drafts=result[2].drafts;jobs=result[3].jobs;$('#taskDot').hidden=!jobs.some(j=>['queued','running'].includes(j.status));}
 async function loadCatalogue(){
- try{const response=await fetch(isBrowser?'./catalog.json':'/api/export');if(!response.ok)throw new Error('素材清单加载失败');catalogue=(await response.json()).items;catalogueReady=true;}
+ try{const response=await fetch(isBrowser?'./catalog.json?v=20261031-cors':'/api/export',{cache:'no-store'});if(!response.ok)throw new Error('素材清单加载失败');catalogue=(await response.json()).items;catalogueReady=true;}
  catch(e){catalogue=[];catalogueReady=false;toast('公开图库暂不可用，你仍可上传自己的参考图。');}
 }
 async function setLibraryFavorite(id,value){

@@ -10,10 +10,10 @@
 
 - `main` 分支：爬虫、本地管理网站、静态导出与发布程序。
 - `gh-pages` 分支：约 152 MB 的缩略图、预览图，以及网页和公开索引。
-- `originals-0` 到 `originals-c` Releases：大部分原始 PNG 按 SHA-256 首位分组，单个 Release 最多 1,000 个文件。
-- `original-images` 分支：哈希首位为 d/e/f 的原图，当前 543 张、约 386 MB。网页直接读取该分支的固定 raw 地址，减少上传数千个文件时的 API 配额消耗。该分支不计入 Pages 站点体积。
+- `original-images` 分支：全部 2,846 张原图，约 2.06 GB。网页通过支持跨域读取的 raw 地址取得原始字节，该分支不计入 Pages 站点体积。
+- `originals-0` 到 `originals-c` Releases：保留以前发布的原图文件，不删除已有下载链接；新版目录不再将它们用作参考图读取地址。
 
-网页点击详情和下载时访问 Releases 或资源分支的原图，服装详情优先使用站点内 WebP 预览。同组姿势可切换角度。图片不热链原站，因此访问不依赖原站继续运行，但仍依赖 GitHub 服务、网络和账号状态；不保证永久托管或任何地区的访问速度。下载资源分支原图时，部分浏览器可能先打开图片，可用图片菜单另存为。
+网页点击详情和下载时访问资源分支的原图，服装详情优先使用站点内 WebP 预览。同组姿势可切换角度。图片不热链原站，因此访问不依赖原站继续运行，但仍依赖 GitHub 服务、网络和账号状态；不保证永久托管或任何地区的访问速度。下载资源分支原图时，部分浏览器可能先打开图片，可用图片菜单另存为。
 
 公开清单使用字段白名单，**不发布本地 SQLite、个人收藏、标签、备注和回收站中的记录**。未隐藏的下载图片会公开。发布前请先停止采集；程序会拒绝缺失或未下载完整的文件。
 
@@ -38,7 +38,7 @@ cd F:\start_your_own_bussiness\self_media\AIIP\reference_library
 
 上传原图约 2.06 GB，首次上传可能较久。每批 20 个文件后输出进度，已存在且大小及可用远端摘要一致的文件跳过；中断后运行相同命令即可继续。不要同时运行多个发布进程。GitHub API 限流或网络错误时可稍后重试。
 
-默认 `--archive-from d` 将末三组原图放到资源分支，减少 API 请求；后续发布应保持相同分组。`build_static.py` 默认也采用此策略。只有确定配额充足且有意迁移时才改为 `--archive-from none`（全部走 Releases）。仅克隆源码时建议 `git clone --single-branch --branch main https://github.com/XTurnV007/reference-library.git`，避免下载资源分支。
+默认 `--archive-from 0` 将全部原图放到资源分支，解决 Releases 链接的浏览器跨域读取问题。`build_static.py` 默认也采用此策略。首次从旧策略迁移时不要使用 `--site-only`，应先发布全部资源，再发布引用它们的目录；迁移完成后可使用 `--site-only` 更新页面。仅克隆源码时建议 `git clone --single-branch --branch main https://github.com/XTurnV007/reference-library.git`，避免下载资源分支。
 
 脚本输出的仓库地址为真实仓库地址，Pages 地址先标为待构建。只有 GitHub 返回当前网页提交已构建完成，脚本才报告「Pages 构建已完成」。等待超时不代表失败，可在仓库 Actions 查看。
 
@@ -65,7 +65,7 @@ cd F:\start_your_own_bussiness\self_media\AIIP\reference_library
 & "G:\python311\python.exe" build_static.py --repo XTurnV007/reference-library
 ```
 
-输出为 `site/`。原图仍需发布到对应 Releases，单独执行导出不会上传任何内容，也不会生成可访问的网址。导出目录旁的 `.publish-state.json` 包含本地路径，不应上传；`.gitignore` 已排除生成数据。公开站点中没有在线爬虫；更新由发布命令执行。
+输出为 `site/`。原图仍需发布到资源分支，单独执行导出不会上传任何内容，也不会生成可访问的网址。导出目录旁的 `.publish-state.json` 包含本地路径，不应上传；`.gitignore` 已排除生成数据。公开站点中没有在线爬虫；更新由发布命令执行。
 
 ## 验证
 

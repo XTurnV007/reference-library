@@ -164,8 +164,8 @@ class LibraryTests(unittest.TestCase):
         item=json.loads(raw)['items'][0]
         self.assertNotIn('favorite',item)
         self.assertTrue(item['preview'].startswith('./images/'))
-        self.assertTrue(item['original'].startswith(('https://github.com/example/reference-library/releases/download/originals-',
-                                                     'https://raw.githubusercontent.com/example/reference-library/original-images/')))
+        self.assertTrue(item['original'].startswith('https://raw.githubusercontent.com/example/reference-library/original-images/'))
+        self.assertNotIn('/releases/download/', raw)
         html=(output/'gallery.html').read_text(encoding='utf-8')
         self.assertIn('src="./static-api.js"',html)
         self.assertIn('src="./analytics.js"',html)

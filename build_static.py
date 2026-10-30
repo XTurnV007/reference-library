@@ -12,7 +12,7 @@ from library import DEFAULT_DATA, connect, local_path
 BASE = Path(__file__).resolve().parent
 
 
-def build(root, output, repository, analytics_url=None, archive_from='d'):
+def build(root, output, repository, analytics_url=None, archive_from='0'):
     if not re.fullmatch(r'[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+', repository):
         raise ValueError('仓库格式应为 owner/repository')
     if archive_from not in ('none',*'0123456789abcdef'):
@@ -102,5 +102,5 @@ if __name__=='__main__':
     p.add_argument('--output',type=Path,default=BASE/'site')
     p.add_argument('--repo',required=True,help='owner/repository')
     p.add_argument('--analytics-url',default=None,help='共享统计 API 的 HTTPS 基础地址')
-    p.add_argument('--archive-from',default='d',choices=['none',*'0123456789abcdef'],help='此哈希首位及以后的原图改走独立 Git 资源分支，减少 API 请求')
+    p.add_argument('--archive-from',default='0',choices=['none',*'0123456789abcdef'],help='默认全部原图走支持跨域读取的 raw 资源分支；旧分组策略仅供兼容')
     a=p.parse_args();build(a.data,a.output,a.repo,a.analytics_url,a.archive_from)

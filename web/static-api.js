@@ -5,7 +5,7 @@ window.StaticLibrary = (() => {
   let edits = {};
   try { edits = JSON.parse(localStorage.getItem(key) || '{}'); } catch (_) { /* malformed local storage */ }
   if (!edits || typeof edits !== 'object' || Array.isArray(edits)) edits = {};
-  const ready = fetch('./catalog.json').then(async r => {
+  const ready = fetch('./catalog.json?v=20261031-cors', {cache:'no-store'}).then(async r => {
     if (!r.ok) throw new Error('无法读取静态图片清单，请检查部署文件');
     const data = await r.json();
     if (!Array.isArray(data.items)) throw new Error('图片清单格式错误');
