@@ -14,9 +14,9 @@ async function fixture(response,{paused=false,referenceFailure=false}={}){
  const context={window:{},navigator:{locks:{request:async(name,options,callback)=>{if(locked)return callback(null);locked=true;try{return await callback({name});}finally{locked=false;}}}},localStorage:{getItem:()=>null,setItem:()=>{}},sessionStorage:{getItem:k=>session.get(k),setItem:(k,v)=>session.set(k,v),removeItem:k=>session.delete(k)},Blob,File,FormData,AbortController,setTimeout,clearTimeout,atob,
  fetch:async(url,options)=>{calls.push({url,options});return response?response(calls.length,url,options):new Response(JSON.stringify({data:{b64_json:PNG}}),{status:200});}};
  let source=fs.readFileSync(path.join(__dirname,'static/image-provider.js'),'utf8');
- assert.ok(source.includes('const GENERATION_PAUSED=true;'));
- // Unpause only this isolated VM with mocked fetch, never the shipped adapter.
- if(!paused)source=source.replace('const GENERATION_PAUSED=true;','const GENERATION_PAUSED=false;');
+ assert.ok(source.includes('const GENERATION_PAUSED=false;'));
+ // Exercise the pause switch only inside the isolated VM with mocked fetch.
+ if(paused)source=source.replace('const GENERATION_PAUSED=false;','const GENERATION_PAUSED=true;');
  vm.runInNewContext(source,context);
  const provider=context.window.ReferenceImageProvider;
  await provider.initialize({storage,reference:async()=>{if(referenceFailure)throw new Error('原图无法读取');return {blob:new Blob([Buffer.from(PNG,'base64')],{type:'image/png'}),note:''};},notify:()=>{},newId:()=>('id'+(++serial)),copy:structuredClone});
@@ -84,7 +84,7 @@ test('startup marks an unfinished batch interrupted without a provider call',asy
  const job=await f.provider.request('/jobs/old');assert.equal(job.status,'interrupted');assert.equal(job.tasks[0].status,'interrupted');assert.equal(job.tasks[1].status,'interrupted');assert.equal(f.calls.length,0);
 });
 
-test('production pause blocks both submission and retry before any provider request',async()=>{
+test('pause switch blocks both submission and retry before any provider request',async()=>{
  const f=await fixture(undefined,{paused:true});assert.equal(f.provider.info().generation_available,false);
  await assert.rejects(f.provider.request('/generations',{params:f.params,idempotency_key:'blocked'}),/暂停/);
  await f.storage.put('jobs',{id:'oldfailed',status:'failed',params:f.params,tasks:[{status:'failed'}]});

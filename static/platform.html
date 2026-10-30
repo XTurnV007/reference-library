@@ -1,6 +1,6 @@
 <!doctype html>
 <html lang="zh-CN" data-theme="system">
-<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="color-scheme" content="light dark"><meta name="referrer" content="no-referrer"><title>参考图书馆 · 创作平台</title><link rel="stylesheet" href="./platform.css?v=20261031-cors"><script defer src="./image-provider.js?v=20261031-cors"></script><script defer src="./platform.js?v=20261031-cors"></script></head>
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="color-scheme" content="light dark"><meta name="referrer" content="no-referrer"><title>参考图书馆 · 创作平台</title><link rel="stylesheet" href="./platform.css?v=20261031-resumed"><script defer src="./image-provider.js?v=20261031-resumed"></script><script defer src="./platform.js?v=20261031-resumed"></script></head>
 <body data-runtime="server">
 <svg class="icon-defs" aria-hidden="true"><defs>
 <symbol id="i-plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></symbol>
@@ -33,7 +33,7 @@
 <section id="settingsPage" class="page" hidden><h1>设置</h1><div class="settings-list"><div class="setting-row"><div><h2>外观</h2><p>跟随系统或选择固定主题。</p></div><select id="theme" aria-label="外观"><option value="system">跟随系统</option><option value="light">浅色</option><option value="dark">深色</option></select></div><div class="setting-row"><div><h2>模型服务</h2><p id="modelSettingsMessage">填写自己的 API Key，启用多图编辑。</p></div><span id="modelSettingsStatus" class="muted">待填写密钥</span></div>
 <div id="providerSettings" class="provider-settings" hidden>
 <label class="field">接口地址<input value="https://ai.cursorai.art/v1/images/edits" readonly aria-label="接口地址"></label>
-<p class="hint">当前正在核对接口错误与扣费问题，生图及重试提交已暂停。填写密钥不会恢复提交；素材、草稿和作品仍可使用。</p>
+<p class="hint">浏览器直接调用以上接口。填写密钥后即可在工作台提交生成任务，原图通过支持跨域读取的 raw 地址载入。</p>
 <label class="field">API Key<input id="apiKey" type="password" autocomplete="off" spellcheck="false" autocapitalize="off" maxlength="4096" placeholder="在此粘贴自己的 API Key，不含 Bearer"></label>
 <label class="inline-filter"><input type="checkbox" id="rememberApiKey">仅在当前标签页会话中记住</label>
 <p class="hint">默认仅在页面内存中使用，刷新后需重新填写；勾选后使用 sessionStorage，标签页关闭后通常会清除。浏览器恢复会话时可能保留。不会写入源码、草稿或作品。</p>
