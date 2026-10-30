@@ -222,7 +222,7 @@ class Handler(BaseHTTPRequestHandler):
                                   filename=item_id.replace(':', '_') + path.suffix)
         files = {'/': 'platform.html','/studio':'platform.html','/studio.html':'platform.html',
                  '/gallery':'index.html','/gallery.html':'index.html',
-                 '/platform.js':'platform.js','/platform.css':'platform.css',
+                 '/platform.js':'platform.js','/platform.css':'platform.css','/image-provider.js':'image-provider.js',
                  '/app.js': 'app.js', '/style.css': 'style.css',
                  '/analytics.js':'analytics.js','/analytics.css':'analytics.css'}
         if url.path not in files:

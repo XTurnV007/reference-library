@@ -48,7 +48,7 @@ def build(root, output, repository, analytics_url=None, archive_from='d'):
                       (BASE/'static/analytics.js','analytics.js'),(BASE/'web/static-api.js','static-api.js')]:
         shutil.copy2(src,output/name)
     shutil.copy2(BASE/'static/analytics.css',output/'analytics.css')
-    for name in ('platform.js','platform.css'):shutil.copy2(BASE/'static'/name,output/name)
+    for name in ('platform.js','platform.css','image-provider.js'):shutil.copy2(BASE/'static'/name,output/name)
     (output/'analytics-config.json').write_text(json.dumps({'base_url':analytics_url.rstrip('/')}),encoding='utf-8')
     (output/'.nojekyll').touch()
     items, originals, missing = [], {}, []

@@ -17,7 +17,9 @@ SOURCE_FILES = ['.gitignore','README.md','PUBLISH.md','crawler.py','library.py',
                 'static/index.html','static/style.css','static/app.js','web/static-api.js',
                 'static/analytics.js','static/analytics.css','analytics.py','analytics_server.py','test_analytics.py','ANALYTICS.md',
                 'studio.py','test_studio.py','PLATFORM.md','AI_STUDIO_PLAN.md',
-                'static/platform.html','static/platform.js','static/platform.css']
+                'static/platform.html','static/platform.js','static/platform.css',
+                'static/image-provider.js','image_relay.py','IMAGE_API.md',
+                'test_image_relay.py','test_image_provider.cjs']
 
 
 def command(args, cwd=BASE, check=True):

@@ -9,12 +9,14 @@ const isBrowser=document.body.dataset.runtime==='browser';
 const kinds={person:'我的人像',cloth:'服装',pose:'姿势',work:'作品'};
 const categories={'ランジェリー':'内衣','パーティ':'派对','水着':'泳装','セクシー':'性感'};
 const statuses={queued:'排队中',running:'生成中',done:'已完成',failed:'失败',partial:'部分失败',cancelled:'已停止',interrupted:'服务曾中断'};
-const defaults=()=>({person:null,cloth:null,poses:[],model:'',width:1536,height:2048,variants:1,prompt:''});
+const defaults=()=>({person:null,cloth:null,poses:[],model:'',width:1024,height:1536,quality:'auto',variants:1,prompt:''});
 let state={page:'studio',draftId:uuid(),title:'未命名创作',params:defaults(),kind:'cloth',assetLimit:60,pickerKind:'cloth',pickerLimit:60,activeJob:null};
 let catalogue=[],uploads=[],works=[],drafts=[],jobs=[],models=[],status={},libraryFavorites=new Set();
 let toastTimer,saveTimer,searchTimer,saveChain=Promise.resolve(),eventAbort=null,viewerRef=null,uploadKind='person';
-let catalogueReady=false,requestSerial=0,renderSerial=0,dirtyVersion=0,savedVersion=0,importing=false;
+let catalogueReady=false,requestSerial=0,renderSerial=0,dirtyVersion=0,savedVersion=0,importing=false,submitting=false;
+const provider=window.ReferenceImageProvider;
 const imageCache=new Map();
+const referenceCache=new Map();
 function toast(text){$('#toast').textContent=text;$('#toast').hidden=false;clearTimeout(toastTimer);toastTimer=setTimeout(()=>$('#toast').hidden=true,4000);}
 const guard=fn=>(...args)=>Promise.resolve().then(()=>fn(...args)).catch(e=>toast(e.message||'操作失败'));
 function empty(title,text=''){return `<div class="empty-state">${icon('folder')}<h3>${esc(title)}</h3>${text?`<p>${esc(text)}</p>`:''}</div>`;}
@@ -23,7 +25,7 @@ function formatDate(value){return new Date(value*1000).toLocaleString('zh-CN',{h
 // Static hosting stores private material locally. No uploaded bytes go to GitHub.
 const browserDB=(()=>{
  let pending;
- function db(){if(!pending)pending=new Promise((resolve,reject)=>{const request=indexedDB.open('reference-creative-platform-v1',1);request.onupgradeneeded=()=>{for(const name of ['assets','drafts','works'])request.result.createObjectStore(name,{keyPath:'id'});};request.onsuccess=()=>resolve(request.result);request.onerror=()=>reject(new Error('浏览器存储不可用，请退出隐私模式或使用本地管理服务'));request.onblocked=()=>reject(new Error('请关闭此网站的旧标签页，再重试'));});return pending;}
+ function db(){if(!pending)pending=new Promise((resolve,reject)=>{const request=indexedDB.open('reference-creative-platform-v1',2);request.onupgradeneeded=()=>{for(const name of ['assets','drafts','works','jobs'])if(!request.result.objectStoreNames.contains(name))request.result.createObjectStore(name,{keyPath:'id'});};request.onsuccess=()=>{request.result.onversionchange=()=>request.result.close();resolve(request.result);};request.onerror=()=>reject(new Error('浏览器存储不可用，请退出隐私模式或使用本地管理服务'));request.onblocked=()=>reject(new Error('请关闭此网站的旧标签页，再重试'));});return pending;}
  async function run(name,mode,action){const database=await db();return new Promise((resolve,reject)=>{const tx=database.transaction(name,mode);let result;tx.onerror=()=>reject(new Error('个人数据保存失败，可能是浏览器空间不足'));tx.onabort=()=>reject(new Error('个人数据保存中断'));tx.oncomplete=()=>resolve(result);const req=action(tx.objectStore(name));if(req)req.onsuccess=()=>{result=req.result;};});}
  const all=name=>run(name,'readonly',store=>store.getAll());
  const get=(name,id)=>run(name,'readonly',store=>store.get(id));
@@ -31,7 +33,7 @@ const browserDB=(()=>{
  function publicAsset(asset){const {blob,...rest}=asset;return rest;}
  async function request(path,body){
   const [route,query='']=path.split('?');const q=new URLSearchParams(query);
-  if(route==='/status')return {storage:'browser',models:[],generation_available:false,private:true,max_upload_bytes:12*1024**2,message:'模型尚未接入。个人素材、草稿和作品仅保存在当前浏览器。'};
+  if(route==='/status')return {storage:'browser',private:true,max_upload_bytes:12*1024**2,...provider.info()};
   if(route==='/assets')return {assets:(await all('assets')).filter(a=>!a.trashed&&(!q.get('kind')||a.kind===q.get('kind'))).sort((a,b)=>b.created_at-a.created_at).map(publicAsset)};
   if(route==='/drafts'&&!body)return {drafts:(await all('drafts')).sort((a,b)=>b.updated_at-a.updated_at)};
   if(route==='/drafts'){
@@ -47,8 +49,7 @@ const browserDB=(()=>{
    const table=route.startsWith('/assets')?'assets':'works',value=await get(table,body.id);if(!value)throw new Error('记录不存在');
    for(const field of table==='assets'?['favorite','trashed']:['favorite'])if(typeof body[field]==='boolean')value[field]=body[field];await put(table,value);return {ok:true};
   }
-  if(route==='/jobs')return {jobs:[]};
-  if(route==='/generations')throw new Error('模型尚未接入，未创建生成任务');
+  if(route==='/jobs'||route.startsWith('/jobs/')||route==='/generations')return provider.request(route,body);
   throw new Error('此功能需要连接生成服务');
  }
  async function upload(kind,file){
@@ -57,8 +58,30 @@ const browserDB=(()=>{
   const value={id:uuid(),kind,name:file.name,mime:file.type,blob:file,sha256:hash,size:file.size,favorite:false,trashed:false,created_at:now()};await put('assets',value);return publicAsset(value);
  }
  async function blob(id){const asset=await get('assets',id);if(!asset)throw new Error('图片不存在');return asset.blob;}
- return {request,upload,blob};
+ return {request,upload,blob,all,get,put};
 })();
+
+async function generationReference(ref){
+ const cacheKey=ref.source+':'+ref.id;
+ if(!referenceCache.has(cacheKey)){
+  const pending=(async()=>{
+   if(ref.source==='upload'){const blob=await browserDB.blob(ref.id);return {blob,note:''};}
+   const item=resolve(ref);if(!item)throw new Error('参考素材已不存在，请重新选择');
+   const urls=[...new Set([item.original,item.full,item.preview].filter(Boolean))];
+   for(const url of urls){
+    try{
+     const response=await fetch(url,{credentials:'omit',referrerPolicy:'no-referrer',signal:AbortSignal.timeout(30000)});
+     if(!response.ok)continue;
+     const blob=await response.blob();
+     if(!['image/png','image/jpeg','image/webp'].includes(blob.type)||!blob.size||blob.size>50*1024**2)continue;
+     return {blob,note:url!==urls[0]?`${item.title}：原图无法跨域读取，使用图库预览图作为参考。`:''};
+    }catch(_){}
+   }
+   throw new Error('无法读取图库参考图片，请下载后手动上传，再生成');
+  })();referenceCache.set(cacheKey,pending);pending.catch(()=>referenceCache.delete(cacheKey));
+ }
+ return referenceCache.get(cacheKey);
+}
 
 async function api(path,body){
  if(isBrowser)return browserDB.request(path,body);
@@ -123,6 +146,7 @@ function saveDraft(){
 }
 function updateSettings(){
  $('#draftTitle').value=state.title;$('#prompt').value=state.params.prompt;$('#variants').value=String(state.params.variants);
+ $('#quality').value=state.params.quality||'auto';$('#quality').disabled=!isBrowser;
  const current=state.params.model;
  $('#model').innerHTML=models.length?models.map(m=>`<option value="${esc(m.id)}">${esc(m.label||m.id)}</option>`).join(''):'<option value="">尚未接入模型</option>';
  $('#model').disabled=!models.length;
@@ -143,10 +167,10 @@ function renderPlan(){
  const gcd=(a,b)=>b?gcd(b,a%b):a,div=gcd(state.params.width,state.params.height);
  $('#aspect').textContent=(state.params.width/div)+':'+(state.params.height/div);
  $('#poseCount').textContent=state.params.poses.length;
- const ready=models.length&&state.params.person&&state.params.cloth&&state.params.poses.length;
+ const ready=models.length&&resolve(state.params.person)&&resolve(state.params.cloth)&&state.params.poses.length&&state.params.poses.every(resolve)&&!submitting&&!jobs.some(j=>['queued','running'].includes(j.status));
  $('#generate').disabled=!ready;
- $('#generate').textContent=!models.length?'模型未接入':`生成 ${count} 张`;
- $('#modelNotice').textContent=models.length?'每张图片单独返回；提交后可切换页面，任务会继续执行。':status.message||'模型尚未接入，可以保存草稿。';
+ $('#generate').textContent=submitting?'准备参考图…':!models.length?'请先配置模型':`生成 ${count} 张`;
+ $('#modelNotice').textContent=models.length?(isBrowser?'每张单独请求并计费，结果逐张返回。请保持此标签页打开；图库原图无法读取时会使用预览图并标注。':'每张图片单独返回；提交后可切换页面，任务会继续执行。'):status.message||'请在设置中配置模型。';
 }
 function referenceCard(ref,kind,index){const item=resolve(ref),title=item?.title||'引用已失效';return `<div class="reference-card"><button class="reference-image" data-view-ref="${esc(ref.id)}" data-ref-source="${esc(ref.source)}" aria-label="查看 ${esc(title)}">${item?imageTag(ref,title):'<span>素材已移除</span>'}</button><button class="remove-reference" data-remove-kind="${kind}" data-index="${index}" aria-label="移除 ${esc(title)}">${icon('close')}</button><span class="reference-caption">${esc(item?.angle?item.angle+' · '+title:title)}</span></div>`;}
 async function renderReferences(){
@@ -202,15 +226,18 @@ async function renderMaterials(picker){
 async function openPicker(kind){state.pickerKind=kind;state.pickerLimit=60;$('#pickerTitle').textContent='选择'+kinds[kind];$('#pickerSearch').value='';$('#pickerMine').checked=kind==='person';updateCategories(true);$('#picker').showModal();await renderMaterials(true);}
 async function viewImage(ref,kind){viewerRef={ref,kind};const item=resolve(ref);$('#viewerTitle').textContent=item?.title||'作品图片';$('#viewerUse').hidden=!kind||kind==='work';$('#viewerImage').removeAttribute('src');$('#viewerImage').alt=item?.title||'作品图片';$('#viewer').showModal();$('#viewerImage').src=await imageURL(ref,true);}
 async function download(ref){const url=await imageURL(ref,true),a=document.createElement('a'),item=resolve(ref),extension=item?.mime==='image/webp'?'.webp':item?.mime==='image/jpeg'?'.jpg':'.png';a.href=url;a.download=(item?.title||'reference-image').replace(/\.(png|jpe?g|webp)$/i,'')+extension;if(ref.source==='library'){a.target='_blank';a.rel='noreferrer';}document.body.append(a);a.click();a.remove();}
-function resultMarkup(ref,label){return `<article><button class="result-stage" data-view-ref="${esc(ref.id)}" data-ref-source="${ref.source}" aria-label="查看 ${esc(label)}">${imageTag(ref,label)}</button><div class="result-meta"><span>${esc(label)}</span><button class="icon-button" data-download-ref="${esc(ref.id)}" data-ref-source="${ref.source}" aria-label="下载图片">${icon('download')}</button></div></article>`;}
+function resultMarkup(ref,label,note=''){return `<article><button class="result-stage" data-view-ref="${esc(ref.id)}" data-ref-source="${ref.source}" aria-label="查看 ${esc(label)}">${imageTag(ref,label)}</button><div class="result-meta"><span>${esc(label)}</span><button class="icon-button" data-download-ref="${esc(ref.id)}" data-ref-source="${ref.source}" aria-label="下载图片">${icon('download')}</button></div>${note?`<p class="hint">${esc(note)}</p>`:''}</article>`;}
 async function renderWorks(){
  const list=works.filter(w=>!$('#favoriteWorks').checked||w.favorite);
  $('#worksList').innerHTML=list.map(work=>`<section class="work-batch"><div class="work-header"><div><h2>${esc(work.title)}</h2><p>${work.source==='imported'?'用户导入':'模型生成'} · ${formatDate(work.created_at)} · ${work.results.length} 张</p></div><div class="action-row"><button class="quiet" data-reuse-work="${esc(work.id)}">复用参数</button><button class="icon-button favorite ${work.favorite?'on':''}" data-favorite-work="${esc(work.id)}" aria-label="收藏此批作品">${icon('star')}</button></div></div><div class="work-images">${work.results.map((r,i)=>resultMarkup({source:'upload',id:r.asset_id},'作品 '+(i+1))).join('')||'<p class="hint">此批次尚未产生成功图片。</p>'}</div></section>`).join('')||empty('还没有作品','接入模型后保存生成结果，也可以先导入已有作品。');
  await hydrate($('#worksList'));
 }
 function renderSettings(){
- $('#modelSettingsStatus').textContent=models.length?'已连接':'未接入';
- $('#modelSettingsMessage').textContent=models.length?`当前 ${models.length} 个模型可用。`:'本阶段暂不接入模型，不收集或保存 API 密钥。';
+ const connection=isBrowser?provider.info():null;
+ $('#modelSettingsStatus').textContent=isBrowser?(connection.verified?'已成功生成':connection.configured?'已填写 · 待验证':'待填写密钥'):(models.length?'已连接':'未接入');
+ $('#modelSettingsMessage').textContent=isBrowser?'ai.cursorai.art · 多图编辑。人像、服装、当前姿势按此顺序上传。密钥不会写入 GitHub；只有点击生成才会提交图片。':models.length?`当前 ${models.length} 个模型可用。`:'请打开 GitHub 在线版配置本次图像接口；当前本地管理服务未接入模型。';
+ $('#providerSettings').hidden=!isBrowser;
+ if(isBrowser)$('#connectionMode').value=connection.mode;
  $('#dataLocation').textContent=isBrowser?'私人图片、草稿与作品保存在当前浏览器。清除站点数据会移除这些内容；请保留自己的原始图片。':'私人图片、草稿、作品与任务记录保存在服务器数据目录的 studio/ 子目录中。';
 }
 async function openDrafts(){drafts=(await api('/drafts')).drafts;$('#draftList').innerHTML=drafts.map(d=>`<div class="draft-row"><div><strong>${esc(d.title)}</strong><small>${formatDate(d.updated_at)} · ${d.params.poses.length} 个姿势</small></div><button class="quiet" data-open-draft="${esc(d.id)}">打开</button></div>`).join('')||'<p class="hint">还没有保存的草稿。</p>';$('#draftsDialog').showModal();}
@@ -219,19 +246,21 @@ async function reuse(work){if(dirtyVersion>savedVersion)await saveDraft();state.
 async function renderResults(job){
  if(!job){$('#jobStatus').textContent='';$('#batchSummary').textContent='';$('#jobActions').hidden=true;$('#results').innerHTML=empty('图片会出现在这里',models.length?'左侧选好参考图片后开始生成。':'模型尚未接入，可先上传素材、保存草稿或导入作品。');return;}
  $('#jobStatus').textContent=`${statuses[job.status]||job.status} · ${job.tasks.filter(t=>t.status==='done').length}/${job.tasks.length} 张`;
- $('#batchSummary').textContent=`${job.params.width}×${job.params.height} · ${formatDate(job.created_at)}`;
+ $('#batchSummary').textContent=`${job.params.model} · ${job.params.width}×${job.params.height} · ${formatDate(job.created_at)}`;
  $('#jobActions').hidden=!['queued','running','failed','partial'].includes(job.status);$('#cancelJob').hidden=!['queued','running'].includes(job.status);$('#retryJob').hidden=!job.tasks.some(t=>t.status==='failed');
  $('#results').innerHTML=job.tasks.map(task=>{
   const pose=resolve(task.spec.pose),label=(pose?.angle||pose?.title||'姿势')+' · '+(task.spec.variation+1);
-  return task.status==='done'?resultMarkup({source:'upload',id:task.asset_id},label):`<article><div class="result-stage"><div class="result-message ${task.status==='failed'?'error':''}">${esc(statuses[task.status]||task.status)}${task.error?'<br>'+esc(task.error):''}</div></div><div class="result-meta"><span>${esc(label)}</span></div></article>`;
+  const note=(task.reference_notes||[]).join(' ');
+  return task.status==='done'?resultMarkup({source:'upload',id:task.asset_id},label,note):`<article><div class="result-stage"><div class="result-message ${task.status==='failed'?'error':''}">${esc(statuses[task.status]||task.status)}${task.error?'<br>'+esc(task.error):''}</div></div><div class="result-meta"><span>${esc(label)}</span></div>${note?`<p class="hint">${esc(note)}</p>`:''}</article>`;
  }).join('');await hydrate($('#results'));
 }
-async function syncJob(id){const job=await api('/jobs/'+encodeURIComponent(id));if(state.activeJob!==id)return;await renderResults(job);if(!['queued','running'].includes(job.status)){await refreshPrivate();if(state.page==='works')await renderWorks();}}
+async function syncJob(id){const job=await api('/jobs/'+encodeURIComponent(id));if(state.activeJob!==id)return;await refreshPrivate();await renderResults(job);renderPlan();if(state.page==='works')await renderWorks();if(state.page==='settings')renderSettings();}
 async function watchJob(id){
  eventAbort?.abort();const controller=new AbortController();eventAbort=controller;state.activeJob=id;let after=0;
  while(!controller.signal.aborted&&state.activeJob===id){
   try{
    await syncJob(id);const job=await api('/jobs/'+encodeURIComponent(id));if(!['queued','running'].includes(job.status))return;
+   if(isBrowser){await new Promise(resolve=>setTimeout(resolve,1000));continue;}
    const response=await fetch('/api/studio/events?'+new URLSearchParams({id,after}),{signal:controller.signal});if(!response.ok)throw new Error('事件连接中断');
    const reader=response.body.getReader(),decoder=new TextDecoder();let buffer='';
    while(!controller.signal.aborted){const {value,done}=await reader.read();if(done)break;buffer+=decoder.decode(value,{stream:true}).replace(/\r\n/g,'\n');let boundary;while((boundary=buffer.indexOf('\n\n'))>=0){const record=buffer.slice(0,boundary);buffer=buffer.slice(boundary+2);for(const line of record.split('\n'))if(line.startsWith('id:'))after=Math.max(after,Number(line.slice(3))||0);if(record.includes('data:'))await syncJob(id);}}
@@ -240,13 +269,15 @@ async function watchJob(id){
  }
 }
 async function generate(){
+ if(submitting)return;
  if(!models.length){toast('模型尚未接入，未创建任务');return;}
  if(state.params.poses.length*state.params.variants>20){if(!confirm('本次将创建较多任务，请确认模型的真实费用规则。是否继续？'))return;}
- $('#generate').disabled=true;$('#configError').textContent='';
- try{await saveDraft();const job=await api('/generations',{params:clone(state.params),idempotency_key:uuid()});state.activeJob=job.id;watchJob(job.id).catch(e=>toast(e.message));}
- catch(e){$('#configError').textContent=e.message;}finally{renderPlan();}
+ submitting=true;renderPlan();$('#configError').textContent='';
+ try{await saveDraft();const job=await api('/generations',{title:state.title,params:clone(state.params),idempotency_key:uuid()});state.activeJob=job.id;await refreshPrivate();watchJob(job.id).catch(e=>toast(e.message));}
+ catch(e){$('#configError').textContent=e.message;}finally{submitting=false;renderPlan();}
 }
 async function boot(){
+ if(isBrowser)await provider.initialize({storage:browserDB,reference:generationReference,newId:uuid,copy:clone,notify:id=>{if(state.activeJob===id)syncJob(id).catch(e=>toast(e.message));else refreshPrivate().then(()=>{renderPlan();if(state.page==='works')return renderWorks();}).catch(()=>{});}});
  try{const saved=localStorage.getItem('reference-platform.theme')||'system';$('#theme').value=saved;document.documentElement.dataset.theme=saved;libraryFavorites=new Set(JSON.parse(localStorage.getItem('reference-platform.library-favorites')||'[]'));}catch(_){}
  const loaded=await Promise.all([api('/status'),loadCatalogue()]);status=loaded[0];models=status.models||[];
  if(!isBrowser)libraryFavorites=new Set(catalogue.filter(i=>i.favorite).map(i=>i.id));
@@ -255,7 +286,7 @@ async function boot(){
  if(drafts.length){state.draftId=drafts[0].id;state.title=drafts[0].title;state.params=clone(drafts[0].params);$('#draftStatus').textContent='已恢复最近草稿';}
  updateSettings();await renderReferences();await renderResults(null);renderSettings();
  const page=location.hash.slice(1);showPage(['studio','works','assets','settings'].includes(page)?page:'studio');
- const active=jobs.find(j=>['queued','running'].includes(j.status));if(active&&!isBrowser)watchJob(active.id).catch(e=>toast(e.message));
+ const active=jobs.find(j=>['queued','running'].includes(j.status))||jobs[0];if(active)watchJob(active.id).catch(e=>toast(e.message));
 }
 
 document.addEventListener('click',guard(async e=>{
@@ -277,7 +308,8 @@ $('#newDraft').onclick=guard(newDraft);$('#saveDraft').onclick=guard(async()=>{a
 $('#toggleConfig').onclick=()=>{const hidden=document.body.classList.toggle('config-hidden');$('#toggleConfig').setAttribute('aria-expanded',String(!hidden));};
 $('#draftTitle').oninput=()=>{state.title=$('#draftTitle').value;markDirty();};$('#prompt').oninput=()=>{state.params.prompt=$('#prompt').value;markDirty();};
 $('#variants').onchange=()=>{state.params.variants=Number($('#variants').value);renderPlan();markDirty();};$('#size').onchange=()=>{[state.params.width,state.params.height]=$('#size').value.split('x').map(Number);renderPlan();markDirty();};$('#model').onchange=()=>{state.params.model=$('#model').value;sizeOptions();renderPlan();markDirty();};
-$('#generate').onclick=guard(generate);$('#cancelJob').onclick=guard(async()=>{if(state.activeJob){const r=await api('/jobs/'+state.activeJob+'/cancel',{});toast(r.message);await syncJob(state.activeJob);}});$('#retryJob').onclick=guard(async()=>{if(!state.activeJob)return;const job=await api('/jobs/'+state.activeJob+'/retry',{idempotency_key:uuid()});watchJob(job.id).catch(e=>toast(e.message));});
+$('#quality').onchange=()=>{state.params.quality=$('#quality').value;markDirty();};
+$('#generate').onclick=guard(generate);$('#cancelJob').onclick=guard(async()=>{if(state.activeJob){const r=await api('/jobs/'+state.activeJob+'/cancel',{});toast(r.message);await syncJob(state.activeJob);}});$('#retryJob').onclick=guard(async()=>{if(!state.activeJob)return;if(!confirm('重新提交失败项可能产生新的费用。是否重试？'))return;const job=await api('/jobs/'+state.activeJob+'/retry',{idempotency_key:uuid()});watchJob(job.id).catch(e=>toast(e.message));});
 $('#assetTabs').onclick=guard(async e=>{const button=e.target.closest('[data-kind]');if(!button)return;state.kind=button.dataset.kind;state.assetLimit=60;$('#assetCategory').value='';document.querySelectorAll('#assetTabs button').forEach(b=>b.setAttribute('aria-pressed',String(b===button)));updateCategories(false);await renderMaterials(false);});
 for(const id of ['assetCategory','favoriteAssets','myUploads'])$('#'+id).onchange=guard(async()=>{state.assetLimit=60;await renderMaterials(false);});$('#assetSearch').oninput=()=>{clearTimeout(searchTimer);searchTimer=setTimeout(guard(async()=>{state.assetLimit=60;await renderMaterials(false);}),180);};
 for(const id of ['pickerCategory','pickerMine'])$('#'+id).onchange=guard(async()=>{state.pickerLimit=60;await renderMaterials(true);});$('#pickerSearch').oninput=()=>{clearTimeout(searchTimer);searchTimer=setTimeout(guard(async()=>{state.pickerLimit=60;await renderMaterials(true);}),180);};
@@ -290,11 +322,13 @@ $('#importWorks').onclick=()=>{$('#workInput').value='';$('#workInput').click();
  try{const asset_ids=[];for(const file of files){asset_ids.push((await uploadFile('work',file)).id);toast(`正在导入 ${asset_ids.length}/${files.length}`);}await api('/works/import',{title:(files[0].name+(files.length>1?' 等 '+files.length+' 张':'')).slice(0,100),asset_ids,params:clone(state.params)});await refreshPrivate();await renderWorks();toast('作品已导入');}finally{importing=false;$('#importWorks').disabled=false;e.target.value='';}
 });
 $('#theme').onchange=()=>{document.documentElement.dataset.theme=$('#theme').value;try{localStorage.setItem('reference-platform.theme',$('#theme').value);}catch(_){toast('外观设置只在本次访问生效');}};
+$('#saveApiKey').onclick=guard(async()=>{provider.configure($('#apiKey').value,$('#rememberApiKey').checked,$('#connectionMode').value);$('#apiKey').value='';status=await api('/status');models=status.models||[];updateSettings();renderSettings();markDirty();toast(models.length?'密钥已配置，首次成功生成后验证连接':'密钥已清除');});
+$('#clearApiKey').onclick=guard(async()=>{provider.configure('',false,$('#connectionMode').value);$('#apiKey').value='';$('#rememberApiKey').checked=false;status=await api('/status');models=status.models||[];updateSettings();renderSettings();toast('已清除密钥；已提交的批次会继续使用提交时的密钥直到结束');});
 $('#exportDrafts').onclick=guard(async()=>{const data=await api('/drafts'),blob=new Blob([JSON.stringify({version:1,...data},null,2)],{type:'application/json'}),url=URL.createObjectURL(blob),a=document.createElement('a');a.href=url;a.download='reference-studio-drafts.json';a.click();setTimeout(()=>URL.revokeObjectURL(url),1000);toast('已导出参数，不包含图片文件');});
 $('#viewerDownload').onclick=guard(()=>viewerRef&&download(viewerRef.ref));$('#viewerUse').onclick=guard(async()=>{if(viewerRef){choose(viewerRef.ref,viewerRef.kind);$('#viewer').close();if($('#picker').open)$('#picker').close();showPage('studio');}});
 document.addEventListener('paste',guard(async e=>{if(state.page!=='studio'||['INPUT','TEXTAREA'].includes(e.target.tagName))return;const files=[...(e.clipboardData?.files||[])].filter(f=>f.type.startsWith('image/'));if(files.length)await importReferences(files.slice(0,1),'person');}));
 $('#configPanel').addEventListener('dragover',e=>{e.preventDefault();});$('#configPanel').addEventListener('drop',e=>{e.preventDefault();const section=e.target.closest('.reference-section'),kind=section?.querySelector('[data-upload]')?.dataset.upload||'person';const files=[...e.dataTransfer.files];guard(()=>importReferences(kind==='pose'?files:files.slice(0,1),kind))();});
-window.addEventListener('beforeunload',e=>{if(dirtyVersion>savedVersion){e.preventDefault();e.returnValue='';}});window.addEventListener('pagehide',()=>{eventAbort?.abort();for(const value of imageCache.values())value.then(url=>URL.revokeObjectURL(url)).catch(()=>{});});
-setInterval(()=>{if(!document.hidden&&!isBrowser)refreshPrivate().then(()=>{if(state.page==='works')return renderWorks();}).catch(()=>{});},5000);
+window.addEventListener('beforeunload',e=>{if(dirtyVersion>savedVersion||(isBrowser&&jobs.some(j=>['queued','running'].includes(j.status)))){e.preventDefault();e.returnValue='';}});window.addEventListener('pagehide',()=>{eventAbort?.abort();for(const value of imageCache.values())value.then(url=>URL.revokeObjectURL(url)).catch(()=>{});});
+setInterval(()=>{if(!document.hidden)refreshPrivate().then(()=>{renderPlan();if(state.page==='works')return renderWorks();}).catch(()=>{});},5000);
 boot().catch(e=>{$('#configError').textContent=e.message;$('#results').innerHTML=empty('个人工作区暂不可用',e.message);toast(e.message);});
 })();
