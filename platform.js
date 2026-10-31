@@ -145,7 +145,7 @@ function saveDraft(){
 }
 function updateSettings(){
  $('#draftTitle').value=state.title;$('#prompt').value=state.params.prompt;$('#variants').value=String(state.params.variants);
- $('#quality').value='auto';$('#quality').disabled=true;
+ $('#quality').value=state.params.quality||'auto';$('#quality').disabled=!isBrowser;
  const current=state.params.model;
  $('#model').innerHTML=models.length?models.map(m=>`<option value="${esc(m.id)}">${esc(m.label||m.id)}</option>`).join(''):'<option value="">尚未接入模型</option>';
  $('#model').disabled=!models.length;
@@ -235,7 +235,7 @@ async function renderWorks(){
 function renderSettings(){
  const connection=isBrowser?provider.info():null;
  $('#modelSettingsStatus').textContent=isBrowser?(connection.paused?'提交已暂停':connection.verified?'已成功生成':connection.configured?'已填写 · 待验证':'待填写密钥'):(models.length?'已连接':'未接入');
- $('#modelSettingsMessage').textContent=isBrowser?(connection.paused?connection.message:'云端转发至 ugq.ai · gpt-image-2。按顺序提交人像、服装、当前姿势三张 PNG，并等待完整图片返回。请填写 ugq.ai 对应的密钥。'):models.length?`当前 ${models.length} 个模型可用。`:'请打开 GitHub 在线版配置本次图像接口；当前本地管理服务未接入模型。';
+ $('#modelSettingsMessage').textContent=isBrowser?(connection.paused?connection.message:'云端转发至 ai.cursorai.art · 多图编辑。按顺序提交人像、服装、当前姿势三张 PNG，并等待完整图片返回。请填写 ai.cursorai.art 对应的密钥。'):models.length?`当前 ${models.length} 个模型可用。`:'请打开 GitHub 在线版配置本次图像接口；当前本地管理服务未接入模型。';
  $('#providerSettings').hidden=!isBrowser;
  $('#dataLocation').textContent=isBrowser?'私人图片、草稿与作品保存在当前浏览器。清除站点数据会移除这些内容；请保留自己的原始图片。':'私人图片、草稿、作品与任务记录保存在服务器数据目录的 studio/ 子目录中。';
 }

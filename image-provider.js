@@ -1,14 +1,14 @@
 'use strict';
 // This adapter uses the supplied third-party contract, not OpenAI's public API.
 window.ReferenceImageProvider = (() => {
- const UPSTREAM='https://ugq.ai/v1/images/edits';
+ const UPSTREAM='https://ai.cursorai.art/v1/images/edits';
  const RELAY_ORIGIN='https://reference-library-image-relay.amberlyric256.chatgpt.site';
  const ENDPOINT=RELAY_ORIGIN+'/v1/images/edits';
  const GENERATION_PAUSED=false;
  const PAUSE_REASON='生图提交已暂停：正在核对 HTTP 404 与扣费问题。请勿重试；素材、草稿和已有作品仍可使用。';
- const SESSION_KEY='reference-platform.ugq-key.v1';
- const sizes=[[1024,1536],[1024,1024],[1536,1024],[2048,2048],[2880,2880],[1536,2304],[2352,3520],[2304,1536],[3520,2352],[1536,2048],[2480,3312],[2048,1536],[3312,2480],[1152,2048],[2160,3840],[2048,1152],[3840,2160],[2688,1152],[3840,1648]];
- const models=[{id:'gpt-image-2',label:'gpt-image-2',sizes,max_refs:3,max_tasks:80,quality_supported:false}];
+ const SESSION_KEY='reference-platform.cursor-key';
+ const sizes=[[1024,1536],[1024,1024],[1536,1024],[2048,2048],[2048,1152],[3840,2160],[2160,3840]];
+ const models=['gpt-image-2','gpt-image-2-all','gpt-image-1','gpt-image-1-all','flux-kontext-pro','flux-kontext-max'].map(id=>({id,label:id,sizes,max_refs:3,max_tasks:80,quality_supported:true}));
  const pngCache=new Map();
  const lockName='reference-studio-provider';
  let key='',verified=false,storage,reference,notify=()=>{},newId,copy;
@@ -19,7 +19,7 @@ window.ReferenceImageProvider = (() => {
   key=next;verified=false;
   try{if(remember&&key)sessionStorage.setItem(SESSION_KEY,key);else sessionStorage.removeItem(SESSION_KEY);}catch(_){throw new Error('浏览器无法保存会话密钥，请取消会话保存后重试');}
  }
- function info(){return {endpoint:ENDPOINT,transport:'cloud',configured:!!key,verified,paused:GENERATION_PAUSED,models:key?models:[],generation_available:!!key&&!GENERATION_PAUSED,message:GENERATION_PAUSED?PAUSE_REASON:key?'通过云端转发将三张 PNG 参考图发送至 ugq.ai。每张单独提交并等待完整结果，请保持此标签页打开。':'请在设置中填写 ugq.ai 的 API Key，启用生成功能。'};}
+ function info(){return {endpoint:ENDPOINT,transport:'cloud',configured:!!key,verified,paused:GENERATION_PAUSED,models:key?models:[],generation_available:!!key&&!GENERATION_PAUSED,message:GENERATION_PAUSED?PAUSE_REASON:key?'通过云端转发将三张参考图发送至 ai.cursorai.art。每张单独提交并等待完整结果，请保持此标签页打开。':'请在设置中填写 ai.cursorai.art 的 API Key，启用生成功能。'};}
  function changed(id){notify(id);}
  function withLock(callback){if(!navigator.locks)throw new Error('浏览器不支持任务锁，请使用新版 Chrome、Edge 或 Firefox');return navigator.locks.request(lockName,{ifAvailable:true},callback);}
  async function initialize(options){
@@ -68,10 +68,10 @@ window.ReferenceImageProvider = (() => {
  }
  async function edit(task,params,refs,token){
   const form=new FormData();
-  for(let i=0;i<refs.length;i++)form.append('image[]',refs[i].blob,`reference-${i+1}.png`);
+  for(let i=0;i<refs.length;i++)form.append('image',refs[i].blob,`reference-${i+1}.png`);
   form.append('prompt',`请根据三张参考图片生成一张完整的人像摄影作品。图片顺序固定：第一张是人物身份参考，保持其面部特征和身份；第二张仅参考服装款式、颜色与配饰；第三张仅参考身体姿势和拍摄视角，不采用第三张的人物身份或绘画风格。最终画面只有同一位人物，不要拼贴、分屏或显示参考图。${params.prompt?'补充要求：'+params.prompt:''}`);
   form.append('model',params.model);form.append('n','1');form.append('size',params.width+'x'+params.height);
-  form.append('response_format','b64_json');
+  form.append('quality',params.quality||'auto');form.append('background','auto');form.append('moderation','auto');
   // The relay allows 600 s for generation and, only for URL results, another
   // 600 s for image download, matching the reference script's separate calls.
   const controller=new AbortController(),timeout=setTimeout(()=>controller.abort(),21*60*1000);
@@ -152,7 +152,7 @@ window.ReferenceImageProvider = (() => {
     const healthController=new AbortController(),healthTimeout=setTimeout(()=>healthController.abort(),10000);
     try{
      const response=await fetch(RELAY_ORIGIN+'/health',{credentials:'omit',redirect:'error',referrerPolicy:'no-referrer',signal:healthController.signal,cache:'no-store'});
-     const health=await response.json();if(!response.ok||health.ok!==true||health.service!=='reference-library-image-relay'||health.upstream!==UPSTREAM||health.protocol!=='ugq-multipart-png-v1')throw new Error();
+     const health=await response.json();if(!response.ok||health.ok!==true||health.service!=='reference-library-image-relay'||health.upstream!==UPSTREAM||health.protocol!=='cursor-multipart-image-v2')throw new Error();
     }catch(_){throw new Error('云端转发不可用或无访问权限，尚未提交生图请求。请稍后重试。');}
     finally{clearTimeout(healthTimeout);}
     const params=copy(body.params),tasks=retryTasks?retryTasks.map(t=>({...copy(t),id:newId(),status:'queued',error:'',asset_id:null})):params.poses.flatMap(pose=>Array.from({length:params.variants},(_,variation)=>({id:newId(),spec:{person:params.person,cloth:params.cloth,pose,variation},status:'queued'})));
