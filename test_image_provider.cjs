@@ -7,29 +7,30 @@ const path=require('node:path');
 const PNG='iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+a9FkAAAAASUVORK5CYII=';
 const pause=()=>new Promise(resolve=>setImmediate(resolve));
 
-async function fixture(response,{paused=false,referenceFailure=false,healthFailure=false}={}){
- const tables=Object.fromEntries(['jobs','works','assets'].map(k=>[k,new Map()])),calls=[],healthCalls=[],session=new Map();let serial=0,locked=false;
+async function fixture(response,{paused=false,referenceFailure=false,healthFailure=false,savedKeys=[]}={}){
+ const tables=Object.fromEntries(['jobs','works','assets'].map(k=>[k,new Map()])),calls=[],healthCalls=[],session=new Map(savedKeys);let serial=0,locked=false;
  const storage={all:async t=>structuredClone([...tables[t].values()]),get:async(t,id)=>structuredClone(tables[t].get(id)),put:async(t,value)=>{tables[t].set(value.id,structuredClone(value));},upload:async(kind,file)=>{const value={id:'asset'+(++serial),kind,blob:file};tables.assets.set(value.id,value);return value;}};
  class File extends Blob{constructor(parts,name,options){super(parts,options);this.name=name;}}
  const context={window:{},navigator:{locks:{request:async(name,options,callback)=>{if(locked)return callback(null);locked=true;try{return await callback({name});}finally{locked=false;}}}},localStorage:{getItem:()=>null,setItem:()=>{}},sessionStorage:{getItem:k=>session.get(k),setItem:(k,v)=>session.set(k,v),removeItem:k=>session.delete(k)},URL,Blob,File,FormData,AbortController,setTimeout,clearTimeout,atob,
- fetch:async(url,options)=>{if(url.endsWith('/health')){healthCalls.push({url,options});if(healthFailure)throw new TypeError('relay unavailable');return new Response(JSON.stringify({ok:true,service:'reference-library-image-relay',upstream:'https://ugq.ai/v1/images/edits',protocol:'ugq-multipart-png-v1'}),{status:200});}calls.push({url,options});return response?response(calls.length,url,options):new Response(JSON.stringify({data:{b64_json:PNG}}),{status:200});}};
+ fetch:async(url,options)=>{if(url.endsWith('/health')){healthCalls.push({url,options});if(healthFailure)throw new TypeError('relay unavailable');return new Response(JSON.stringify({ok:true,service:'reference-library-image-relay',upstream:'https://ai.cursorai.art/v1/images/edits',protocol:'cursor-multipart-image-v2'}),{status:200});}calls.push({url,options});return response?response(calls.length,url,options):new Response(JSON.stringify({data:{b64_json:PNG}}),{status:200});}};
  let source=fs.readFileSync(path.join(__dirname,'static/image-provider.js'),'utf8');
  assert.ok(source.includes('const GENERATION_PAUSED=false;'));
  // Exercise the pause switch only inside the isolated VM with mocked fetch.
  if(paused)source=source.replace('const GENERATION_PAUSED=false;','const GENERATION_PAUSED=true;');
  vm.runInNewContext(source,context);
  const provider=context.window.ReferenceImageProvider;
+ const restoredConfigured=provider.info().configured;
  await provider.initialize({storage,reference:async()=>{if(referenceFailure)throw new Error('原图无法读取');return {blob:new Blob([Buffer.from(PNG,'base64')],{type:'image/png'}),note:''};},notify:()=>{},newId:()=>('id'+(++serial)),copy:structuredClone});
  provider.configure('offline-secret',false);
  const params={person:{source:'upload',id:'person'},cloth:{source:'upload',id:'cloth'},poses:[{source:'upload',id:'pose'}],model:'gpt-image-2',width:1024,height:1536,quality:'high',variants:1,prompt:'白色背景'};
  async function terminal(id){for(let i=0;i<200;i++){const job=await provider.request('/jobs/'+id);if(!['queued','running'].includes(job.status)){await pause();return job;}await pause();}throw new Error('Fixture did not finish');}
- return {provider,storage,tables,calls,healthCalls,session,params,terminal};
+ return {provider,storage,tables,calls,healthCalls,session,params,terminal,restoredConfigured};
 }
 
 test('three repeated image fields, one output, object response, no persisted key',async()=>{
  const f=await fixture();const job=await f.provider.request('/generations',{params:f.params,idempotency_key:'one'});
  const result=await f.terminal(job.id);assert.equal(result.status,'done');assert.equal(f.calls.length,1);
- const request=f.calls[0];assert.equal(request.options.body.getAll('image[]').length,3);assert.equal(request.options.body.getAll('image').length,0);assert.equal(request.options.body.get('n'),'1');assert.equal(request.options.body.get('response_format'),'b64_json');assert.equal(request.options.body.get('quality'),null);assert.equal(request.options.body.get('background'),null);assert.equal(request.options.body.get('moderation'),null);assert.equal(request.options.headers.Authorization,'Bearer offline-secret');
+ const request=f.calls[0];assert.equal(request.options.body.getAll('image').length,3);assert.equal(request.options.body.getAll('image[]').length,0);assert.equal(request.options.body.get('n'),'1');assert.equal(request.options.body.get('response_format'),null);assert.equal(request.options.body.get('quality'),'high');assert.equal(request.options.body.get('background'),'auto');assert.equal(request.options.body.get('moderation'),'auto');assert.equal(request.options.headers.Authorization,'Bearer offline-secret');
  assert.equal(f.provider.info().verified,true);assert.equal(f.session.size,0);
  assert.ok(!JSON.stringify([...f.tables.jobs.values(),...f.tables.works.values()]).includes('offline-secret'));
  const duplicate=await f.provider.request('/generations',{params:f.params,idempotency_key:'one'});assert.equal(duplicate.id,job.id);assert.equal(f.calls.length,1);
@@ -122,4 +123,10 @@ test('failed URL download retains the completed image link and does not regenera
  const f=await fixture(()=>new Response(JSON.stringify({error:{code:'result_download_failed',message:'download failed',result_url:'https://images.example.test/result.png'}}),{status:502}));
  const job=await f.provider.request('/generations',{params:f.params,idempotency_key:'download-failure'});
  const result=await f.terminal(job.id);assert.equal(result.status,'interrupted');assert.equal(result.tasks[0].result_url,'https://images.example.test/result.png');assert.equal(f.calls.length,1);
+});
+
+test('restoring the original provider never reuses another provider session key',async()=>{
+ const other=await fixture(undefined,{savedKeys:[['reference-platform.ugq-key.v1','other-provider-fixture']]});assert.equal(other.restoredConfigured,false);
+ const original=await fixture(undefined,{savedKeys:[['reference-platform.cursor-key','original-provider-fixture']]});assert.equal(original.restoredConfigured,true);
+ assert.equal(other.calls.length,0);assert.equal(original.calls.length,0);
 });

@@ -32,7 +32,7 @@ test('wrong origin, missing key, oversized body and arbitrary query cannot reach
 test('streams multipart bytes unchanged to the sole upstream and streams JSON back',async()=>{
  const f=fixture();const body='--fixture\r\nContent-Disposition: form-data; name="prompt"\r\n\r\nfixture\r\n--fixture--\r\n';
  const response=await f.worker.fetch(request('POST',undefined,{Authorization:'Bearer offline-secret','Content-Type':'multipart/form-data; boundary=fixture',Cookie:'not-forwarded'},body));
- assert.equal(response.status,200);assert.equal(f.calls.length,1);assert.equal(f.calls[0].url,'https://ugq.ai/v1/images/edits');assert.equal(f.calls[0].options.duplex,'half');
+ assert.equal(response.status,200);assert.equal(f.calls.length,1);assert.equal(f.calls[0].url,'https://ai.cursorai.art/v1/images/edits');assert.equal(f.calls[0].options.duplex,'half');
  assert.equal(await new Response(f.calls[0].options.body).text(),body);assert.equal(f.calls[0].options.headers.Cookie,undefined);
  assert.equal((await response.json()).data.b64_json,'fixture');
 });
@@ -46,7 +46,7 @@ test('upstream error keeps a request ID, masks credentials and never retries',as
 
 test('URL results are downloaded without Authorization, including after a redirect',async()=>{
  const f=fixture((url,options)=>{
-  if(url==='https://ugq.ai/v1/images/edits')return new Response(JSON.stringify({data:[{url:'https://images.example.test/result'}]}));
+  if(url==='https://ai.cursorai.art/v1/images/edits')return new Response(JSON.stringify({data:[{url:'https://images.example.test/result'}]}));
   assert.equal(options.headers.Authorization,undefined);assert.equal(options.credentials,'omit');
   return url.endsWith('/result')?new Response(null,{status:302,headers:{Location:'https://cdn.example.test/final.png'}}):new Response('image-fixture',{headers:{'Content-Type':'image/png'}});
  });
@@ -55,9 +55,9 @@ test('URL results are downloaded without Authorization, including after a redire
 });
 
 test('unreadable URL results return a recovery link and never regenerate',async()=>{
- const f=fixture(url=>url==='https://ugq.ai/v1/images/edits'?new Response(JSON.stringify({data:[{url:'https://images.example.test/result.png'}]})):new Response('missing',{status:404}));
+ const f=fixture(url=>url==='https://ai.cursorai.art/v1/images/edits'?new Response(JSON.stringify({data:[{url:'https://images.example.test/result.png'}]})):new Response('missing',{status:404}));
  const response=await f.worker.fetch(request('POST',undefined,{Authorization:'Bearer offline-secret','Content-Type':'multipart/form-data; boundary=fixture'},'body'));
- assert.equal(response.status,502);const value=await response.json();assert.equal(value.error.result_url,'https://images.example.test/result.png');assert.equal(f.calls.filter(c=>c.url==='https://ugq.ai/v1/images/edits').length,1);
+ assert.equal(response.status,502);const value=await response.json();assert.equal(value.error.result_url,'https://images.example.test/result.png');assert.equal(f.calls.filter(c=>c.url==='https://ai.cursorai.art/v1/images/edits').length,1);
 });
 
 test('private or insecure image URLs never receive a download request',async()=>{

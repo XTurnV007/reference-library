@@ -1,4 +1,4 @@
-const UPSTREAM='https://ugq.ai/v1/images/edits';
+const UPSTREAM='https://ai.cursorai.art/v1/images/edits';
 const EDIT_PATH='/v1/images/edits';
 const ORIGINS=new Set(['https://xturnv007.github.io']);
 const MAX_REQUEST=51*1024**2;
@@ -87,13 +87,13 @@ export default {
    let streamReady=false;
    try{streamReady=!!new Request(UPSTREAM,{method:'POST',body:new Response('transport-self-check').body,duplex:'half'}).body;}catch(_){}
    // Constructing this Request performs no network I/O and uses no API key.
-   const value={ok:streamReady,service:'reference-library-image-relay',transport:'cloud',upstream:UPSTREAM,protocol:'ugq-multipart-png-v1',image_field:'image[]',response_format:'b64_json',upstream_timeout_seconds:600,stores_key:false,stores_images:false,retries:0,stream_request_ready:streamReady,stream_duplex:'half'};
+   const value={ok:streamReady,service:'reference-library-image-relay',transport:'cloud',upstream:UPSTREAM,protocol:'cursor-multipart-image-v2',image_field:'image',result_format:'b64_json-or-url',upstream_timeout_seconds:600,stores_key:false,stores_images:false,retries:0,stream_request_ready:streamReady,stream_duplex:'half'};
    const status=streamReady?200:503;
    return request.method==='HEAD'?new Response(null,{status,headers}):json(status,value,headers);
   }
   if(request.method==='GET'&&url.pathname==='/'){
    headers.set('Content-Type','text/html; charset=utf-8');
-   return new Response('<!doctype html><html lang="zh-CN"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>参考图书馆 · 云端转发</title><body style="font:16px system-ui;max-width:680px;margin:12vh auto;padding:24px;line-height:1.8"><h1>图像接口云端转发</h1><p>固定转发至 ugq.ai，使用 PNG 多参考图和 b64_json 响应。密钥由创作平台在每次请求中传入，服务不保存密钥或图片，不自动重试。</p><p><a href="https://xturnv007.github.io/reference-library/#studio">打开创作平台</a> · <a href="/health">查看服务状态</a></p></body></html>',{status:200,headers});
+   return new Response('<!doctype html><html lang="zh-CN"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>参考图书馆 · 云端转发</title><body style="font:16px system-ui;max-width:680px;margin:12vh auto;padding:24px;line-height:1.8"><h1>图像接口云端转发</h1><p>固定转发至 ai.cursorai.art，使用 PNG 多参考图和 b64_json 响应。密钥由创作平台在每次请求中传入，服务不保存密钥或图片，不自动重试。</p><p><a href="https://xturnv007.github.io/reference-library/#studio">打开创作平台</a> · <a href="/health">查看服务状态</a></p></body></html>',{status:200,headers});
   }
   if(url.pathname!==EDIT_PATH)return failure(404,'not_found','接口不存在',headers);
   if(request.method!=='POST')return failure(405,'method_not_allowed','仅接受 POST 图片编辑请求',headers);
