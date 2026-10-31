@@ -50,8 +50,12 @@ export default {
    return new Response(null,{status:204,headers});
   }
   if(['GET','HEAD'].includes(request.method)&&url.pathname==='/health'){
-   const value={ok:true,service:'reference-library-image-relay',transport:'cloud',upstream:UPSTREAM,stores_key:false,stores_images:false,retries:0};
-   return request.method==='HEAD'?new Response(null,{status:200,headers}):json(200,value,headers);
+   let streamReady=false;
+   try{streamReady=!!new Request(UPSTREAM,{method:'POST',body:new Response('transport-self-check').body,duplex:'half'}).body;}catch(_){}
+   // Constructing this Request performs no network I/O and uses no API key.
+   const value={ok:streamReady,service:'reference-library-image-relay',transport:'cloud',upstream:UPSTREAM,stores_key:false,stores_images:false,retries:0,stream_request_ready:streamReady,stream_duplex:'half'};
+   const status=streamReady?200:503;
+   return request.method==='HEAD'?new Response(null,{status,headers}):json(status,value,headers);
   }
   if(request.method==='GET'&&url.pathname==='/'){
    headers.set('Content-Type','text/html; charset=utf-8');
@@ -72,7 +76,7 @@ export default {
   const timeout=setTimeout(abort,14*60*1000);
   try{
    // Stream multipart bytes untouched. No arbitrary upstream URL, cookie, or log.
-   const response=await fetch(UPSTREAM,{method:'POST',headers:{Accept:'application/json',Authorization:authorization,'Content-Type':contentType},body:limited(request.body,MAX_REQUEST),redirect:'error',signal:controller.signal});
+   const response=await fetch(UPSTREAM,{method:'POST',headers:{Accept:'application/json',Authorization:authorization,'Content-Type':contentType},body:limited(request.body,MAX_REQUEST),duplex:'half',redirect:'error',signal:controller.signal});
    const upstreamId=response.headers.get('X-Request-Id')||response.headers.get('Request-Id')||response.headers.get('X-Oneapi-Request-Id')||'';
    if(/^[a-z0-9_.:-]{1,160}$/i.test(upstreamId))headers.set('X-Upstream-Request-Id',upstreamId);
    if(!response.ok){
@@ -82,7 +86,13 @@ export default {
    if(!response.body)return failure(502,'empty_upstream_response','供应商返回空响应，请先核对结果',headers);
    headers.set('Content-Type','application/json; charset=utf-8');
    return new Response(limited(response.body,MAX_RESPONSE),{status:response.status,headers});
-  }catch(_){return failure(502,'upstream_uncertain','云端调用中断或超时，供应商可能已受理。请先核对结果，未自动重试。',headers);}
+  }catch(error){
+   const code=error?.name==='AbortError'?'upstream_timeout':/duplex/i.test(error?.message||'')?'stream_request_config_error':'upstream_transport_error';
+   const type=['TypeError','AbortError','RangeError','Error'].includes(error?.name)?error.name:'Error';
+   // Metadata only. Never log the exception message, headers, key, or image bytes.
+   console.error(JSON.stringify({relay_request_id:id,code,error_type:type}));
+   return failure(502,code,'云端转发未完成。请先核对供应商结果，未自动重试。',headers);
+  }
   finally{clearTimeout(timeout);request.signal?.removeEventListener('abort',abort);}
  }
 };

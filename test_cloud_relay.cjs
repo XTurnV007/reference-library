@@ -9,7 +9,7 @@ const ORIGIN='https://xturnv007.github.io';
 
 function fixture(respond){
  const calls=[];
- const context={URL,Headers,Response,TransformStream,TextDecoder,Uint8Array,AbortController,crypto:webcrypto,setTimeout,clearTimeout,fetch:async(url,options)=>{calls.push({url,options});return respond?respond(url,options):new Response('{"data":{"b64_json":"fixture"}}',{headers:{'Content-Type':'application/json'}});}};
+ const context={URL,Request,Headers,Response,TransformStream,TextDecoder,Uint8Array,AbortController,crypto:webcrypto,setTimeout,clearTimeout,console:{error:()=>{}},fetch:async(url,options)=>{new Request(url,options);calls.push({url,options});return respond?respond(url,options):new Response('{"data":{"b64_json":"fixture"}}',{headers:{'Content-Type':'application/json'}});}};
  const source=readFileSync(path.join(__dirname,'cloud_relay_worker.js'),'utf8').replace('export default {','globalThis.worker = {');
  vm.runInNewContext(source,context);
  return {worker:context.worker,calls};
@@ -19,7 +19,7 @@ function request(method,route='/v1/images/edits',headers={},body){return new Req
 test('preflight explicitly allows Authorization and health has no upstream call',async()=>{
  const f=fixture();const response=await f.worker.fetch(request('OPTIONS',undefined,{'Access-Control-Request-Method':'POST','Access-Control-Request-Headers':'authorization,content-type'}));
  assert.equal(response.status,204);assert.ok(response.headers.get('Access-Control-Allow-Headers').includes('Authorization'));assert.equal(response.headers.get('Access-Control-Allow-Origin'),ORIGIN);
- const health=await f.worker.fetch(request('GET','/health'));assert.equal((await health.json()).ok,true);assert.equal(f.calls.length,0);
+ const health=await f.worker.fetch(request('GET','/health'));const value=await health.json();assert.equal(value.ok,true);assert.equal(value.stream_request_ready,true);assert.equal(f.calls.length,0);
 });
 
 test('wrong origin, missing key, oversized body and arbitrary query cannot reach provider',async()=>{
@@ -32,7 +32,7 @@ test('wrong origin, missing key, oversized body and arbitrary query cannot reach
 test('streams multipart bytes unchanged to the sole upstream and streams JSON back',async()=>{
  const f=fixture();const body='--fixture\r\nContent-Disposition: form-data; name="prompt"\r\n\r\nfixture\r\n--fixture--\r\n';
  const response=await f.worker.fetch(request('POST',undefined,{Authorization:'Bearer offline-secret','Content-Type':'multipart/form-data; boundary=fixture',Cookie:'not-forwarded'},body));
- assert.equal(response.status,200);assert.equal(f.calls.length,1);assert.equal(f.calls[0].url,'https://ai.cursorai.art/v1/images/edits');
+ assert.equal(response.status,200);assert.equal(f.calls.length,1);assert.equal(f.calls[0].url,'https://ai.cursorai.art/v1/images/edits');assert.equal(f.calls[0].options.duplex,'half');
  assert.equal(await new Response(f.calls[0].options.body).text(),body);assert.equal(f.calls[0].options.headers.Cookie,undefined);
  assert.equal((await response.json()).data.b64_json,'fixture');
 });
