@@ -11,8 +11,8 @@ async function fixture(response,{paused=false,referenceFailure=false,healthFailu
  const tables=Object.fromEntries(['jobs','works','assets'].map(k=>[k,new Map()])),calls=[],healthCalls=[],session=new Map();let serial=0,locked=false;
  const storage={all:async t=>structuredClone([...tables[t].values()]),get:async(t,id)=>structuredClone(tables[t].get(id)),put:async(t,value)=>{tables[t].set(value.id,structuredClone(value));},upload:async(kind,file)=>{const value={id:'asset'+(++serial),kind,blob:file};tables.assets.set(value.id,value);return value;}};
  class File extends Blob{constructor(parts,name,options){super(parts,options);this.name=name;}}
- const context={window:{},navigator:{locks:{request:async(name,options,callback)=>{if(locked)return callback(null);locked=true;try{return await callback({name});}finally{locked=false;}}}},localStorage:{getItem:()=>null,setItem:()=>{}},sessionStorage:{getItem:k=>session.get(k),setItem:(k,v)=>session.set(k,v),removeItem:k=>session.delete(k)},Blob,File,FormData,AbortController,setTimeout,clearTimeout,atob,
- fetch:async(url,options)=>{if(url.endsWith('/health')){healthCalls.push({url,options});if(healthFailure)throw new TypeError('relay unavailable');return new Response(JSON.stringify({ok:true,service:'reference-library-image-relay',upstream:'https://ai.cursorai.art/v1/images/edits'}),{status:200});}calls.push({url,options});return response?response(calls.length,url,options):new Response(JSON.stringify({data:{b64_json:PNG}}),{status:200});}};
+ const context={window:{},navigator:{locks:{request:async(name,options,callback)=>{if(locked)return callback(null);locked=true;try{return await callback({name});}finally{locked=false;}}}},localStorage:{getItem:()=>null,setItem:()=>{}},sessionStorage:{getItem:k=>session.get(k),setItem:(k,v)=>session.set(k,v),removeItem:k=>session.delete(k)},URL,Blob,File,FormData,AbortController,setTimeout,clearTimeout,atob,
+ fetch:async(url,options)=>{if(url.endsWith('/health')){healthCalls.push({url,options});if(healthFailure)throw new TypeError('relay unavailable');return new Response(JSON.stringify({ok:true,service:'reference-library-image-relay',upstream:'https://ugq.ai/v1/images/edits',protocol:'ugq-multipart-png-v1'}),{status:200});}calls.push({url,options});return response?response(calls.length,url,options):new Response(JSON.stringify({data:{b64_json:PNG}}),{status:200});}};
  let source=fs.readFileSync(path.join(__dirname,'static/image-provider.js'),'utf8');
  assert.ok(source.includes('const GENERATION_PAUSED=false;'));
  // Exercise the pause switch only inside the isolated VM with mocked fetch.
@@ -29,7 +29,7 @@ async function fixture(response,{paused=false,referenceFailure=false,healthFailu
 test('three repeated image fields, one output, object response, no persisted key',async()=>{
  const f=await fixture();const job=await f.provider.request('/generations',{params:f.params,idempotency_key:'one'});
  const result=await f.terminal(job.id);assert.equal(result.status,'done');assert.equal(f.calls.length,1);
- const request=f.calls[0];assert.equal(request.options.body.getAll('image').length,3);assert.equal(request.options.body.get('n'),'1');assert.equal(request.options.body.get('quality'),'high');assert.equal(request.options.headers.Authorization,'Bearer offline-secret');
+ const request=f.calls[0];assert.equal(request.options.body.getAll('image[]').length,3);assert.equal(request.options.body.getAll('image').length,0);assert.equal(request.options.body.get('n'),'1');assert.equal(request.options.body.get('response_format'),'b64_json');assert.equal(request.options.body.get('quality'),null);assert.equal(request.options.body.get('background'),null);assert.equal(request.options.body.get('moderation'),null);assert.equal(request.options.headers.Authorization,'Bearer offline-secret');
  assert.equal(f.provider.info().verified,true);assert.equal(f.session.size,0);
  assert.ok(!JSON.stringify([...f.tables.jobs.values(),...f.tables.works.values()]).includes('offline-secret'));
  const duplicate=await f.provider.request('/generations',{params:f.params,idempotency_key:'one'});assert.equal(duplicate.id,job.id);assert.equal(f.calls.length,1);
@@ -48,7 +48,7 @@ test('network uncertainty stops remaining tasks and forbids automatic retry',asy
 });
 
 test('invalid configuration fails before any paid request',async()=>{
- const f=await fixture();f.params.width=1536;f.params.height=2048;
+ const f=await fixture();f.params.width=1000;f.params.height=1000;
  await assert.rejects(f.provider.request('/generations',{params:f.params,idempotency_key:'bad'}),/尺寸/);assert.equal(f.calls.length,0);
  f.provider.configure('',false);await assert.rejects(f.provider.request('/generations',{params:f.params,idempotency_key:'no-key'}),/API Key/);assert.equal(f.calls.length,0);
 });
@@ -110,4 +110,16 @@ test('unavailable cloud health blocks submission without sending the key or imag
  const f=await fixture(undefined,{healthFailure:true});
  await assert.rejects(f.provider.request('/generations',{params:f.params,idempotency_key:'relaydown'}),/尚未提交/);
  assert.equal(f.calls.length,0);assert.equal(f.tables.jobs.size,0);assert.equal(f.healthCalls[0].options.headers,undefined);
+});
+
+test('binary image result returned by the cloud relay is saved without another generation',async()=>{
+ const f=await fixture(()=>new Response(Buffer.from(PNG,'base64'),{headers:{'X-Relay-Image-Result':'1','Content-Type':'image/png'}}));
+ const job=await f.provider.request('/generations',{params:f.params,idempotency_key:'url-result'});
+ const result=await f.terminal(job.id);assert.equal(result.status,'done');assert.equal(f.calls.length,1);assert.equal(result.tasks[0].actual_size.width,1);
+});
+
+test('failed URL download retains the completed image link and does not regenerate',async()=>{
+ const f=await fixture(()=>new Response(JSON.stringify({error:{code:'result_download_failed',message:'download failed',result_url:'https://images.example.test/result.png'}}),{status:502}));
+ const job=await f.provider.request('/generations',{params:f.params,idempotency_key:'download-failure'});
+ const result=await f.terminal(job.id);assert.equal(result.status,'interrupted');assert.equal(result.tasks[0].result_url,'https://images.example.test/result.png');assert.equal(f.calls.length,1);
 });

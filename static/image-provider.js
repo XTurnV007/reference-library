@@ -1,14 +1,15 @@
 'use strict';
 // This adapter uses the supplied third-party contract, not OpenAI's public API.
 window.ReferenceImageProvider = (() => {
- const UPSTREAM='https://ai.cursorai.art/v1/images/edits';
+ const UPSTREAM='https://ugq.ai/v1/images/edits';
  const RELAY_ORIGIN='https://reference-library-image-relay.amberlyric256.chatgpt.site';
  const ENDPOINT=RELAY_ORIGIN+'/v1/images/edits';
  const GENERATION_PAUSED=false;
  const PAUSE_REASON='生图提交已暂停：正在核对 HTTP 404 与扣费问题。请勿重试；素材、草稿和已有作品仍可使用。';
- const SESSION_KEY='reference-platform.cursor-key';
- const sizes=[[1024,1536],[1024,1024],[1536,1024],[2048,2048],[2048,1152],[3840,2160],[2160,3840]];
- const models=['gpt-image-2','gpt-image-2-all','gpt-image-1','gpt-image-1-all','flux-kontext-pro','flux-kontext-max'].map(id=>({id,label:id,sizes,max_refs:3,max_tasks:80}));
+ const SESSION_KEY='reference-platform.ugq-key.v1';
+ const sizes=[[1024,1536],[1024,1024],[1536,1024],[2048,2048],[2880,2880],[1536,2304],[2352,3520],[2304,1536],[3520,2352],[1536,2048],[2480,3312],[2048,1536],[3312,2480],[1152,2048],[2160,3840],[2048,1152],[3840,2160],[2688,1152],[3840,1648]];
+ const models=[{id:'gpt-image-2',label:'gpt-image-2',sizes,max_refs:3,max_tasks:80,quality_supported:false}];
+ const pngCache=new Map();
  const lockName='reference-studio-provider';
  let key='',verified=false,storage,reference,notify=()=>{},newId,copy;
  const time=()=>Date.now()/1000;
@@ -18,7 +19,7 @@ window.ReferenceImageProvider = (() => {
   key=next;verified=false;
   try{if(remember&&key)sessionStorage.setItem(SESSION_KEY,key);else sessionStorage.removeItem(SESSION_KEY);}catch(_){throw new Error('浏览器无法保存会话密钥，请取消会话保存后重试');}
  }
- function info(){return {endpoint:ENDPOINT,transport:'cloud',configured:!!key,verified,paused:GENERATION_PAUSED,models:key?models:[],generation_available:!!key&&!GENERATION_PAUSED,message:GENERATION_PAUSED?PAUSE_REASON:key?'通过云端转发将三张参考图发送至 ai.cursorai.art。每张结果独立返回；请保持此标签页打开。':'请在设置中填写 API Key，启用多图生成功能。'};}
+ function info(){return {endpoint:ENDPOINT,transport:'cloud',configured:!!key,verified,paused:GENERATION_PAUSED,models:key?models:[],generation_available:!!key&&!GENERATION_PAUSED,message:GENERATION_PAUSED?PAUSE_REASON:key?'通过云端转发将三张 PNG 参考图发送至 ugq.ai。每张单独提交并等待完整结果，请保持此标签页打开。':'请在设置中填写 ugq.ai 的 API Key，启用生成功能。'};}
  function changed(id){notify(id);}
  function withLock(callback){if(!navigator.locks)throw new Error('浏览器不支持任务锁，请使用新版 Chrome、Edge 或 Firefox');return navigator.locks.request(lockName,{ifAvailable:true},callback);}
  async function initialize(options){
@@ -33,36 +34,59 @@ window.ReferenceImageProvider = (() => {
    }
   });
  }
- async function decode(result){
-  const data=Array.isArray(result.data)?result.data[0]:result.data;
-  const encoded=data?.b64_json;
-  if(typeof encoded!=='string'||!encoded||encoded.length>72*1024**2)throw new Error('接口未返回有效的 b64_json 图片');
-  let binary;try{binary=atob(encoded);}catch(_){throw new Error('接口返回的图片编码无效');}
-  const bytes=Uint8Array.from(binary,c=>c.charCodeAt(0));
+ function imageBlob(bytes){
   const ascii=(a,b)=>String.fromCharCode(...bytes.slice(a,b));
   const type=bytes[0]===137&&ascii(1,4)==='PNG'?'image/png':bytes[0]===255&&bytes[1]===216&&bytes[2]===255?'image/jpeg':ascii(0,4)==='RIFF'&&ascii(8,12)==='WEBP'?'image/webp':'';
   if(!type||bytes.length>50*1024**2)throw new Error('接口返回的图片格式不受支持或超过 50 MB');
   return new Blob([bytes],{type});
  }
+ async function decode(result){
+  const data=Array.isArray(result.data)?result.data[0]:result.data;
+  const encoded=data?.b64_json;
+  if(typeof encoded!=='string'||!encoded||encoded.length>72*1024**2)throw new Error('接口未返回有效的 b64_json 图片');
+  let binary;try{binary=atob(encoded);}catch(_){throw new Error('接口返回的图片编码无效');}
+  return imageBlob(Uint8Array.from(binary,c=>c.charCodeAt(0)));
+ }
+ async function pngReference(ref){
+  const id=ref.source+':'+ref.id;
+  if(!pngCache.has(id)){
+   const pending=(async()=>{
+    const value=await reference(ref),header=new Uint8Array(await value.blob.slice(0,8).arrayBuffer());
+    if([137,80,78,71,13,10,26,10].every((n,i)=>header[i]===n))return {...value,blob:new Blob([value.blob],{type:'image/png'})};
+    let bitmap;
+    try{
+     bitmap=await createImageBitmap(value.blob);
+     if(!bitmap.width||!bitmap.height||bitmap.width>8192||bitmap.height>8192||bitmap.width*bitmap.height>32*1024**2)throw new Error();
+     const canvas=document.createElement('canvas');canvas.width=bitmap.width;canvas.height=bitmap.height;canvas.getContext('2d').drawImage(bitmap,0,0);
+     const blob=await new Promise(resolve=>canvas.toBlob(resolve,'image/png'));if(!blob?.size||blob.size>50*1024**2)throw new Error();
+     return {...value,blob};
+    }catch(_){throw new Error('参考图无法转换为 PNG，尚未提交生图请求。请上传有效的 PNG，或更换尺寸较小的原图。');}
+    finally{bitmap?.close();}
+   })();pngCache.set(id,pending);pending.catch(()=>pngCache.delete(id));
+  }
+  return pngCache.get(id);
+ }
  async function edit(task,params,refs,token){
   const form=new FormData();
-  for(let i=0;i<refs.length;i++)form.append('image',refs[i].blob,`reference-${i+1}.${refs[i].blob.type==='image/png'?'png':refs[i].blob.type==='image/webp'?'webp':'jpg'}`);
+  for(let i=0;i<refs.length;i++)form.append('image[]',refs[i].blob,`reference-${i+1}.png`);
   form.append('prompt',`请根据三张参考图片生成一张完整的人像摄影作品。图片顺序固定：第一张是人物身份参考，保持其面部特征和身份；第二张仅参考服装款式、颜色与配饰；第三张仅参考身体姿势和拍摄视角，不采用第三张的人物身份或绘画风格。最终画面只有同一位人物，不要拼贴、分屏或显示参考图。${params.prompt?'补充要求：'+params.prompt:''}`);
   form.append('model',params.model);form.append('n','1');form.append('size',params.width+'x'+params.height);
-  form.append('quality',params.quality||'auto');form.append('background','auto');form.append('moderation','auto');
-  const controller=new AbortController(),timeout=setTimeout(()=>controller.abort(),15*60*1000);
+  form.append('response_format','b64_json');
+  // The relay allows 600 s for generation and, only for URL results, another
+  // 600 s for image download, matching the reference script's separate calls.
+  const controller=new AbortController(),timeout=setTimeout(()=>controller.abort(),21*60*1000);
   try{
    let response;try{response=await fetch(ENDPOINT,{method:'POST',headers:{Accept:'application/json',Authorization:'Bearer '+token},body:form,signal:controller.signal,credentials:'omit',redirect:'error',referrerPolicy:'no-referrer'});}
    catch(_){const error=new Error('云端转发请求中断或超时。供应商可能已处理请求，请先核对账单；未自动重发。');error.uncertain=true;throw error;}
    if(!response.ok){
     let message=response.status===401||response.status===403?'密钥无效或账号无权限':response.status===429?'请求受限或额度不足':response.status===413?'图片体积超出供应商限制':'供应商返回错误';
     let detail='',requestId=response.headers.get('X-Relay-Request-Id')||'',upstreamId=response.headers.get('X-Upstream-Request-Id')||'';
-    try{const value=await response.json();if(value.error?.code&&value.error.code!=='upstream_http_error')message='云端转发未完成';if(typeof value.error?.message==='string')detail=value.error.message.split(token).join('[已隐藏]').replace(/Bearer\s+[^\s"'<>]+/gi,'Bearer [已隐藏]').slice(0,700);}catch(_){}
+    try{const value=await response.json();if(value.error?.code&&value.error.code!=='upstream_http_error')message='云端转发未完成';if(typeof value.error?.message==='string')detail=value.error.message.split(token).join('[已隐藏]').replace(/Bearer\s+[^\s"'<>]+/gi,'Bearer [已隐藏]').slice(0,700);if(value.error?.result_url){const url=new URL(value.error.result_url);if(url.protocol==='https:'&&!url.username&&!url.password)task.result_url=url.href;}}catch(_){}
     requestId=/^[a-z0-9_.:-]{1,160}$/i.test(requestId)?requestId:'';upstreamId=/^[a-z0-9_.:-]{1,160}$/i.test(upstreamId)?upstreamId:'';
     const error=new Error(`${message}（HTTP ${response.status}）。${detail?detail+' ':''}${requestId?'转发请求编号：'+requestId+'。 ':''}${upstreamId?'供应商请求编号：'+upstreamId+'。 ':''}HTTP 错误不能证明未计费，请先核对供应商记录；此项禁止直接重试。`);error.uncertain=true;throw error;
    }
    // Reading/decoding can fail after the request has been accepted; never auto-retry.
-   try{const result=await response.json(),blob=await decode(result);verified=true;return blob;}
+   try{const blob=response.headers.get('X-Relay-Image-Result')==='1'?imageBlob(new Uint8Array(await response.arrayBuffer())):await decode(await response.json());verified=true;return blob;}
    catch(_){const error=new Error('请求已返回，但未能读取有效图片。请先在供应商后台核对结果；未自动重发。');error.uncertain=true;throw error;}
   }finally{clearTimeout(timeout);}
  }
@@ -77,10 +101,15 @@ window.ReferenceImageProvider = (() => {
     task.status='running';await save(job);
     let accepted=false;
     try{
-     const refs=await Promise.all([reference(task.spec.person),reference(task.spec.cloth),reference(task.spec.pose)]);
+     const refs=await Promise.all([pngReference(task.spec.person),pngReference(task.spec.cloth),pngReference(task.spec.pose)]);
      if(refs.reduce((n,r)=>n+r.blob.size,0)>50*1024**2)throw new Error('三张参考图合计超过 50 MB，请更换图片');
      task.reference_notes=refs.map(r=>r.note).filter(Boolean);await save(job);
      const blob=await edit(task,job.params,refs,token);accepted=true;
+     const header=await blob.slice(0,24).arrayBuffer(),bytes=new Uint8Array(header);
+     if(blob.type==='image/png'&&bytes.length===24&&String.fromCharCode(...bytes.slice(12,16))==='IHDR'){
+      const view=new DataView(header),width=view.getUint32(16),height=view.getUint32(20);task.actual_size={width,height};
+      if(width!==job.params.width||height!==job.params.height)task.reference_notes.push(`实际返回 ${width}×${height}（请求 ${job.params.width}×${job.params.height}），已保留返回原图。`);
+     }
      const file=new File([blob],`generation-${job.id.slice(0,8)}-${task.position+1}.${blob.type==='image/png'?'png':blob.type==='image/webp'?'webp':'jpg'}`,{type:blob.type});
      const asset=await storage.upload('work',file);
      const work=await storage.get('works',job.work_id);work.results.push({asset_id:asset.id,position:task.position});await storage.put('works',work);
@@ -123,14 +152,15 @@ window.ReferenceImageProvider = (() => {
     const healthController=new AbortController(),healthTimeout=setTimeout(()=>healthController.abort(),10000);
     try{
      const response=await fetch(RELAY_ORIGIN+'/health',{credentials:'omit',redirect:'error',referrerPolicy:'no-referrer',signal:healthController.signal,cache:'no-store'});
-     const health=await response.json();if(!response.ok||health.ok!==true||health.service!=='reference-library-image-relay'||health.upstream!==UPSTREAM)throw new Error();
+     const health=await response.json();if(!response.ok||health.ok!==true||health.service!=='reference-library-image-relay'||health.upstream!==UPSTREAM||health.protocol!=='ugq-multipart-png-v1')throw new Error();
     }catch(_){throw new Error('云端转发不可用或无访问权限，尚未提交生图请求。请稍后重试。');}
     finally{clearTimeout(healthTimeout);}
     const params=copy(body.params),tasks=retryTasks?retryTasks.map(t=>({...copy(t),id:newId(),status:'queued',error:'',asset_id:null})):params.poses.flatMap(pose=>Array.from({length:params.variants},(_,variation)=>({id:newId(),spec:{person:params.person,cloth:params.cloth,pose,variation},status:'queued'})));
     tasks.forEach((t,i)=>{t.position=i;});
     const job={id:newId(),work_id:newId(),request_key:body.idempotency_key,params,tasks,status:'queued',created_at:time(),cancel_requested:false};
     // Resolve reference accessibility before any paid request; missing assets fail early.
-    await Promise.all([params.person,params.cloth,...params.poses].map(ref=>reference(ref)));
+    const references=[];for(const ref of [params.person,params.cloth,...params.poses])references.push(await pngReference(ref));
+    for(let i=2;i<references.length;i++)if(references[0].blob.size+references[1].blob.size+references[i].blob.size>50*1024**2)throw new Error('转换后的三张 PNG 参考图合计超过 50 MB，尚未提交生图请求');
     await storage.put('works',{id:job.work_id,title:body.title||'AI 创作',source:'generated',params,favorite:false,created_at:time(),results:[]});
     await save(job);started=true;resolve(copy(job));await execute(job,token);
    })).catch(error=>{if(!started)reject(error);});
