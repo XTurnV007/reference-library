@@ -55,9 +55,9 @@ window.ReferenceImageProvider = (() => {
    let response;try{response=await fetch(ENDPOINT,{method:'POST',headers:{Accept:'application/json',Authorization:'Bearer '+token},body:form,signal:controller.signal,credentials:'omit',redirect:'error',referrerPolicy:'no-referrer'});}
    catch(_){const error=new Error('云端转发请求中断或超时。供应商可能已处理请求，请先核对账单；未自动重发。');error.uncertain=true;throw error;}
    if(!response.ok){
-    const message=response.status===401||response.status===403?'密钥无效或账号无权限':response.status===429?'请求受限或额度不足':response.status===413?'图片体积超出供应商限制':'供应商返回错误';
+    let message=response.status===401||response.status===403?'密钥无效或账号无权限':response.status===429?'请求受限或额度不足':response.status===413?'图片体积超出供应商限制':'供应商返回错误';
     let detail='',requestId=response.headers.get('X-Relay-Request-Id')||'',upstreamId=response.headers.get('X-Upstream-Request-Id')||'';
-    try{const value=await response.json();if(typeof value.error?.message==='string')detail=value.error.message.split(token).join('[已隐藏]').replace(/Bearer\s+[^\s"'<>]+/gi,'Bearer [已隐藏]').slice(0,700);}catch(_){}
+    try{const value=await response.json();if(value.error?.code&&value.error.code!=='upstream_http_error')message='云端转发未完成';if(typeof value.error?.message==='string')detail=value.error.message.split(token).join('[已隐藏]').replace(/Bearer\s+[^\s"'<>]+/gi,'Bearer [已隐藏]').slice(0,700);}catch(_){}
     requestId=/^[a-z0-9_.:-]{1,160}$/i.test(requestId)?requestId:'';upstreamId=/^[a-z0-9_.:-]{1,160}$/i.test(upstreamId)?upstreamId:'';
     const error=new Error(`${message}（HTTP ${response.status}）。${detail?detail+' ':''}${requestId?'转发请求编号：'+requestId+'。 ':''}${upstreamId?'供应商请求编号：'+upstreamId+'。 ':''}HTTP 错误不能证明未计费，请先核对供应商记录；此项禁止直接重试。`);error.uncertain=true;throw error;
    }

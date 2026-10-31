@@ -8,7 +8,7 @@ const now=()=>Date.now()/1000;
 const isBrowser=document.body.dataset.runtime==='browser';
 const kinds={person:'我的人像',cloth:'服装',pose:'姿势',work:'作品'};
 const categories={'ランジェリー':'内衣','パーティ':'派对','水着':'泳装','セクシー':'性感'};
-const statuses={queued:'排队中',running:'生成中',done:'已完成',failed:'失败',partial:'部分失败',cancelled:'已停止',interrupted:'服务曾中断'};
+const statuses={queued:'排队中',running:'生成中',done:'已完成',failed:'失败',partial:'部分失败',cancelled:'已停止',interrupted:'请求中断，结果待核对'};
 const defaults=()=>({person:null,cloth:null,poses:[],model:'',width:1024,height:1536,quality:'auto',variants:1,prompt:''});
 let state={page:'studio',draftId:uuid(),title:'未命名创作',params:defaults(),kind:'cloth',assetLimit:60,pickerKind:'cloth',pickerLimit:60,activeJob:null};
 let catalogue=[],uploads=[],works=[],drafts=[],jobs=[],models=[],status={},libraryFavorites=new Set();
